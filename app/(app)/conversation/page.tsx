@@ -32,59 +32,42 @@ export default function ConversationPage() {
   const [status, setStatus] = useState<ARIAStatus>('repos')
   const [modeContinue, setModeContinue] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const esRef = useRef<EventSource | null>(null)
-  const pendingRef = useRef<{ user: string; aria: string } | null>(null)
 
   useEffect(() => {
-    const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL ?? ''
-    const es = new EventSource(`${flaskUrl}/stream/events`)
-    esRef.current = es
+    // Polling toutes les 2s (SSE incompatible avec Cloudflare Tunnel quick)
+    let lastMsgCount = 0
 
-    es.addEventListener('status', (e) => {
-      const data = JSON.parse(e.data)
-      setStatus(data.etat as ARIAStatus)
-    })
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/flask/status')
+        if (!res.ok) return
+        const data = await res.json()
+        setStatus(data.etat as ARIAStatus)
+        setModeContinue(data.mode_continu ?? false)
 
-    es.addEventListener('question', (e) => {
-      const data = JSON.parse(e.data)
-      pendingRef.current = { user: data.texte, aria: '' }
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now() + '-u', role: 'user', text: data.texte, timestamp: new Date() },
-      ])
-    })
-
-    es.addEventListener('reponse_chunk', (e) => {
-      const data = JSON.parse(e.data)
-      if (!pendingRef.current) return
-      pendingRef.current.aria += data.chunk
-      setMessages((prev) => {
-        const last = prev[prev.length - 1]
-        if (last?.role === 'aria') {
-          return [...prev.slice(0, -1), { ...last, text: pendingRef.current!.aria }]
+        // Ajouter seulement les nouveaux messages
+        const msgs: Array<{ role: string; text: string; ts: number }> = data.messages ?? []
+        if (msgs.length > lastMsgCount) {
+          const nouveaux = msgs.slice(lastMsgCount)
+          lastMsgCount = msgs.length
+          setMessages((prev) => [
+            ...prev,
+            ...nouveaux.map((m) => ({
+              id: `${m.ts}-${m.role}`,
+              role: m.role as 'user' | 'aria',
+              text: m.text,
+              timestamp: new Date(m.ts * 1000),
+            })),
+          ])
         }
-        return [
-          ...prev,
-          {
-            id: Date.now() + '-a',
-            role: 'aria',
-            text: data.chunk,
-            timestamp: new Date(),
-          },
-        ]
-      })
-    })
+      } catch {
+        // Flask hors ligne — on réessaie au prochain tick
+      }
+    }
 
-    es.addEventListener('reponse_fin', () => {
-      pendingRef.current = null
-    })
-
-    es.addEventListener('mode_continu', (e) => {
-      const data = JSON.parse(e.data)
-      setModeContinue(data.actif)
-    })
-
-    return () => es.close()
+    poll()
+    const interval = setInterval(poll, 2000)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {

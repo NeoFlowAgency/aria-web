@@ -31,30 +31,22 @@ export default function RobotPage() {
   const [robotState, setRobotState] = useState<RobotState>('repos')
   const [servoAngle, setServoAngle] = useState(90)
 
-  // Sync avec SSE Flask
+  // Polling toutes les 2s
   useEffect(() => {
-    const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL ?? ''
-    const es = new EventSource(`${flaskUrl}/stream/events`)
-
-    es.addEventListener('status', (e) => {
-      const data = JSON.parse(e.data)
-      const etat = data.etat as string
-      if (['repos', 'ecoute', 'reflechit', 'parle'].includes(etat)) {
-        setRobotState(etat as RobotState)
-      }
-    })
-
-    es.addEventListener('expression', (e) => {
-      const data = JSON.parse(e.data)
-      if (data.expr) setExpression(data.expr as Expression)
-    })
-
-    es.addEventListener('servo', (e) => {
-      const data = JSON.parse(e.data)
-      if (typeof data.angle === 'number') setServoAngle(data.angle)
-    })
-
-    return () => es.close()
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/flask/status')
+        if (!res.ok) return
+        const data = await res.json()
+        const etat = data.etat as string
+        if (['repos', 'ecoute', 'reflechit', 'parle'].includes(etat)) {
+          setRobotState(etat as RobotState)
+        }
+      } catch {}
+    }
+    poll()
+    const interval = setInterval(poll, 2000)
+    return () => clearInterval(interval)
   }, [])
 
   async function sendExpression(expr: Expression) {
