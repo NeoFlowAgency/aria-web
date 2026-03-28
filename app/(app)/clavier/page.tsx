@@ -41,6 +41,8 @@ export default function ClavierPage() {
     try {
       await fetch(`/api/flask/keypad/${encodeURIComponent(key)}`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
       })
     } catch {
       // Erreur silencieuse

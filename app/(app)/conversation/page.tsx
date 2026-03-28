@@ -31,10 +31,10 @@ export default function ConversationPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [status, setStatus] = useState<ARIAStatus>('repos')
   const [modeContinue, setModeContinue] = useState(false)
+  const [partial, setPartial] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    // Polling toutes les 2s (SSE incompatible avec Cloudflare Tunnel quick)
     let lastMsgCount = 0
 
     const poll = async () => {
@@ -44,8 +44,9 @@ export default function ConversationPage() {
         const data = await res.json()
         setStatus(data.etat as ARIAStatus)
         setModeContinue(data.mode_continu ?? false)
+        setPartial(data.partial ?? '')
 
-        // Ajouter seulement les nouveaux messages
+        // Nouveaux messages complets
         const msgs: Array<{ role: string; text: string; ts: number }> = data.messages ?? []
         if (msgs.length > lastMsgCount) {
           const nouveaux = msgs.slice(lastMsgCount)
@@ -61,12 +62,13 @@ export default function ConversationPage() {
           ])
         }
       } catch {
-        // Flask hors ligne — on réessaie au prochain tick
+        // Flask hors ligne
       }
     }
 
     poll()
-    const interval = setInterval(poll, 2000)
+    // Polling rapide (500ms) pour effet streaming
+    const interval = setInterval(poll, 500)
     return () => clearInterval(interval)
   }, [])
 
@@ -162,6 +164,21 @@ export default function ConversationPage() {
               </div>
             </motion.div>
           ))}
+
+          {/* Bulle streaming — réponse en cours */}
+          {partial && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex justify-start"
+            >
+              <div className="max-w-[80%] px-4 py-3 rounded-2xl rounded-bl-sm text-sm leading-relaxed bg-white border border-[#0071e3]/30 text-[#1d1d1f]">
+                <span className="block text-xs text-[#0071e3] mb-1 font-medium">ARIA ✦</span>
+                {partial}
+                <span className="inline-block w-1.5 h-3.5 bg-[#0071e3] rounded-sm ml-1 animate-pulse" />
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
         <div ref={bottomRef} />
       </div>
