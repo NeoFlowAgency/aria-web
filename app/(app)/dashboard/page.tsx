@@ -3,65 +3,100 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import Link from 'next/link'
-import { MessageSquare, Cpu, Keyboard, Wifi, WifiOff } from 'lucide-react'
+import { MessageSquare, Cpu, Keyboard, WifiOff } from 'lucide-react'
+
+type ARIAStatus = 'repos' | 'ecoute' | 'reflechit' | 'parle'
+
+const STATUS_LABELS: Record<ARIAStatus, string> = {
+  repos:     'En veille',
+  ecoute:    'Écoute…',
+  reflechit: 'Réfléchit…',
+  parle:     'Parle…',
+}
+const STATUS_COLORS: Record<ARIAStatus, string> = {
+  repos:     '#86868b',
+  ecoute:    '#0071e3',
+  reflechit: '#ff9500',
+  parle:     '#34c759',
+}
 
 const cards = [
-  {
-    href: '/conversation',
-    icon: MessageSquare,
-    title: 'Conversation',
-    description: 'Écouter et parler à ARIA en temps réel',
-    color: '#0071e3',
-  },
-  {
-    href: '/robot',
-    icon: Cpu,
-    title: 'Robot 3D',
-    description: 'Visualisation interactive du robot',
-    color: '#34c759',
-  },
-  {
-    href: '/clavier',
-    icon: Keyboard,
-    title: 'Contrôles',
-    description: 'Clavier virtuel et actions directes',
-    color: '#ff9500',
-  },
+  { href: '/conversation', icon: MessageSquare, title: 'Conversation', description: 'Écouter ARIA en temps réel', color: '#0071e3' },
+  { href: '/robot',        icon: Cpu,           title: 'Robot 3D',     description: 'Visualisation interactive',   color: '#34c759' },
+  { href: '/clavier',      icon: Keyboard,      title: 'Contrôles',    description: 'Clavier virtuel 4×4',         color: '#ff9500' },
 ]
 
 export default function DashboardPage() {
-  const [connected, setConnected] = useState<boolean | null>(null)
+  const [status, setStatus]           = useState<ARIAStatus | null>(null)
+  const [partial, setPartial]         = useState('')
+  const [modeContinue, setModeContinue] = useState(false)
+  const [offline, setOffline]         = useState(false)
+  const [lastMsg, setLastMsg]         = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/flask/ping')
-      .then((r) => setConnected(r.ok))
-      .catch(() => setConnected(false))
-  }, [])
+    let lastCount = 0
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/flask/status')
+        if (!res.ok) { setOffline(true); return }
+        const data = await res.json()
+        setOffline(false)
+        setPartial(data.partial ?? '')
+        setModeContinue(data.mode_continu ?? false)
+        const s = data.etat as ARIAStatus
+        setStatus(partial ? 'parle' : s)
+        const msgs: Array<{ role: string; text: string }> = data.messages ?? []
+        if (msgs.length > lastCount) {
+          lastCount = msgs.length
+          const last = msgs[msgs.length - 1]
+          setLastMsg(last.text)
+        }
+      } catch { setOffline(true) }
+    }
+    poll()
+    const id = setInterval(poll, 1000)
+    return () => clearInterval(id)
+  }, [partial])
+
+  const effectiveStatus: ARIAStatus = partial ? 'parle' : (status ?? 'repos')
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
-      <div className="mb-10">
-        <h1 className="text-4xl font-semibold text-[#1d1d1f] tracking-tight">
-          Bonjour 👋
-        </h1>
-        <p className="text-[#86868b] mt-2">
-          Panneau de contrôle du robot ARIA
-        </p>
+      <div className="mb-8">
+        <h1 className="text-3xl font-semibold text-[#1d1d1f] tracking-tight">Bonjour</h1>
+        <p className="text-[#86868b] mt-1 text-sm">Panneau de contrôle du robot ARIA</p>
 
-        {/* Status robot */}
-        <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-[#d2d2d7] text-sm">
-          {connected === null ? (
-            <span className="w-2 h-2 bg-[#d2d2d7] rounded-full animate-pulse" />
-          ) : connected ? (
+        {/* Statut en temps réel */}
+        <div className="mt-4 flex items-center gap-3 p-3 bg-white rounded-2xl border border-[#d2d2d7] max-w-xs">
+          {offline ? (
             <>
-              <Wifi className="w-3.5 h-3.5 text-[#34c759]" />
-              <span className="text-[#34c759] font-medium">Robot connecté</span>
+              <WifiOff className="w-4 h-4 text-[#ff3b30] flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-[#ff3b30]">Robot hors ligne</p>
+                <p className="text-[11px] text-[#86868b]">Vérifie le tunnel Cloudflare</p>
+              </div>
             </>
           ) : (
             <>
-              <WifiOff className="w-3.5 h-3.5 text-[#ff3b30]" />
-              <span className="text-[#ff3b30] font-medium">Robot hors ligne</span>
+              <motion.span
+                className="w-3 h-3 rounded-full flex-shrink-0"
+                style={{ backgroundColor: STATUS_COLORS[effectiveStatus] }}
+                animate={{ scale: effectiveStatus !== 'repos' ? [1, 1.4, 1] : 1 }}
+                transition={{ repeat: effectiveStatus !== 'repos' ? Infinity : 0, duration: 1 }}
+              />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-[#1d1d1f]">
+                  ARIA — {STATUS_LABELS[effectiveStatus]}
+                  {modeContinue && (
+                    <span className="ml-2 text-[10px] font-semibold text-[#0071e3] bg-[#0071e3]/10 px-1.5 py-0.5 rounded-full">
+                      CONTINU
+                    </span>
+                  )}
+                </p>
+                {lastMsg && (
+                  <p className="text-[11px] text-[#86868b] truncate mt-0.5">{lastMsg}</p>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -74,10 +109,10 @@ export default function DashboardPage() {
             key={card.href}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.08, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ delay: i * 0.07, duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
           >
             <Link href={card.href}>
-              <div className="bg-white rounded-2xl p-6 border border-[#d2d2d7] hover:border-[#0071e3]/40 hover:shadow-lg transition-all group cursor-pointer">
+              <div className="bg-white rounded-2xl p-6 border border-[#d2d2d7] hover:border-[#0071e3]/40 hover:shadow-md transition-all group cursor-pointer">
                 <div
                   className="w-11 h-11 rounded-xl flex items-center justify-center mb-4"
                   style={{ backgroundColor: card.color + '18' }}
