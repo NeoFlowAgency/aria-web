@@ -36,7 +36,8 @@ export default function ConversationPage() {
   const pendingRef = useRef<{ user: string; aria: string } | null>(null)
 
   useEffect(() => {
-    const es = new EventSource('/api/stream')
+    const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL ?? ''
+    const es = new EventSource(`${flaskUrl}/stream/events`)
     esRef.current = es
 
     es.addEventListener('status', (e) => {

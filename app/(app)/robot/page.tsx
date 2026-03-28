@@ -33,7 +33,8 @@ export default function RobotPage() {
 
   // Sync avec SSE Flask
   useEffect(() => {
-    const es = new EventSource('/api/stream')
+    const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL ?? ''
+    const es = new EventSource(`${flaskUrl}/stream/events`)
 
     es.addEventListener('status', (e) => {
       const data = JSON.parse(e.data)
