@@ -1,170 +1,197 @@
 'use client'
 
-import { useRef, useMemo } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { Float, OrbitControls } from '@react-three/drei'
+import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 
-type Expression = 'content' | 'triste' | 'surpris' | 'colere' | 'amoureux' | 'neutre'
-type RobotState = 'repos' | 'ecoute' | 'reflechit' | 'parle' | 'danse'
+export type Expression = 'content' | 'triste' | 'surpris' | 'colere' | 'amoureux' | 'neutre'
+export type RobotState  = 'repos' | 'ecoute' | 'reflechit' | 'parle' | 'danse'
 
-const EXPRESSION_COLORS: Record<Expression, string> = {
-  content:  '#34c759',
-  triste:   '#0071e3',
-  surpris:  '#ff9500',
-  colere:   '#ff3b30',
-  amoureux: '#ff2d55',
-  neutre:   '#aaaaaa',
-}
-
-interface RobotProps {
-  expression: Expression
-  state: RobotState
-  servoAngle: number
-}
-
-function RobotScene({ expression, state, servoAngle }: RobotProps) {
-  const bodyRef  = useRef<THREE.Group>(null)
-  const headRef  = useRef<THREE.Group>(null)
-  const oledRef  = useRef<THREE.Mesh>(null)
-
-  const targetColor = useMemo(
-    () => new THREE.Color(EXPRESSION_COLORS[expression]),
-    [expression]
-  )
-
-  const targetHeadY = useMemo(
-    () => THREE.MathUtils.degToRad(-(servoAngle - 90)),
-    [servoAngle]
-  )
-
-  useFrame((_, delta) => {
-    if (!bodyRef.current || !headRef.current) return
-
-    // Rotation tête
-    headRef.current.rotation.y = THREE.MathUtils.lerp(
-      headRef.current.rotation.y, targetHeadY, delta * 4
-    )
-
-    // Animations selon état
-    const t = _.clock.elapsedTime
-    if (state === 'danse') {
-      bodyRef.current.rotation.z = Math.sin(t * 4) * 0.15
-      bodyRef.current.rotation.y = Math.sin(t * 2) * 0.2
-      bodyRef.current.position.y = Math.sin(t * 4) * 0.1
-    } else if (state === 'parle') {
-      bodyRef.current.rotation.z = Math.sin(t * 6) * 0.02
-      bodyRef.current.position.y = THREE.MathUtils.lerp(bodyRef.current.position.y, 0, delta * 4)
-      bodyRef.current.rotation.y = THREE.MathUtils.lerp(bodyRef.current.rotation.y, 0, delta * 3)
-    } else {
-      bodyRef.current.rotation.z = THREE.MathUtils.lerp(bodyRef.current.rotation.z, 0, delta * 3)
-      bodyRef.current.rotation.y = THREE.MathUtils.lerp(bodyRef.current.rotation.y, 0, delta * 3)
-      bodyRef.current.position.y = THREE.MathUtils.lerp(bodyRef.current.position.y, 0, delta * 4)
-    }
-
-    // Couleur OLED
-    if (oledRef.current) {
-      const mat = oledRef.current.material as THREE.MeshStandardMaterial
-      mat.color.lerp(targetColor, delta * 3)
-      mat.emissive.lerp(targetColor, delta * 3)
-    }
-  })
-
-  return (
-    <Float speed={1.5} rotationIntensity={0.08} floatIntensity={0.25}>
-      <group ref={bodyRef}>
-        {/* Corps */}
-        <mesh castShadow>
-          <boxGeometry args={[1.2, 1.6, 0.8]} />
-          <meshStandardMaterial color="#e8e8ed" roughness={0.3} metalness={0.1} />
-        </mesh>
-
-        {/* Bras gauche */}
-        <mesh position={[-0.75, 0, 0]} castShadow>
-          <boxGeometry args={[0.18, 0.8, 0.18]} />
-          <meshStandardMaterial color="#d2d2d7" roughness={0.4} />
-        </mesh>
-
-        {/* Bras droit */}
-        <mesh position={[0.75, 0, 0]} castShadow>
-          <boxGeometry args={[0.18, 0.8, 0.18]} />
-          <meshStandardMaterial color="#d2d2d7" roughness={0.4} />
-        </mesh>
-
-        {/* Base */}
-        <mesh position={[0, -1.0, 0]} castShadow>
-          <boxGeometry args={[0.9, 0.25, 0.7]} />
-          <meshStandardMaterial color="#d2d2d7" roughness={0.5} />
-        </mesh>
-
-        {/* Tête */}
-        <group ref={headRef} position={[0, 1.1, 0]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.9, 0.85, 0.75]} />
-            <meshStandardMaterial color="#f5f5f7" roughness={0.25} metalness={0.05} />
-          </mesh>
-
-          {/* Écran OLED */}
-          <mesh ref={oledRef} position={[0, 0.05, 0.385]}>
-            <boxGeometry args={[0.55, 0.38, 0.01]} />
-            <meshStandardMaterial
-              color={EXPRESSION_COLORS[expression]}
-              emissive={new THREE.Color(EXPRESSION_COLORS[expression])}
-              emissiveIntensity={1.0}
-              roughness={0.05}
-            />
-          </mesh>
-
-          {/* Antenne */}
-          <mesh position={[0, 0.6, 0]}>
-            <cylinderGeometry args={[0.025, 0.025, 0.35, 8]} />
-            <meshStandardMaterial color="#86868b" roughness={0.5} />
-          </mesh>
-          <mesh position={[0, 0.78, 0]}>
-            <sphereGeometry args={[0.05, 8, 8]} />
-            <meshStandardMaterial
-              color="#0071e3"
-              emissive={new THREE.Color('#0071e3')}
-              emissiveIntensity={state === 'ecoute' ? 2 : 0.4}
-            />
-          </mesh>
-        </group>
-      </group>
-    </Float>
-  )
+const OLED_COLORS: Record<Expression, number> = {
+  content:  0x34c759,
+  triste:   0x0071e3,
+  surpris:  0xff9500,
+  colere:   0xff3b30,
+  amoureux: 0xff2d55,
+  neutre:   0xaaaaaa,
 }
 
 interface RobotViewerProps {
   expression?: Expression
-  state?: RobotState
+  state?:      RobotState
   servoAngle?: number
-  className?: string
+  className?:  string
 }
 
 export default function RobotViewer({
   expression = 'neutre',
-  state = 'repos',
+  state      = 'repos',
   servoAngle = 90,
   className,
 }: RobotViewerProps) {
-  return (
-    <div className={className} style={{ touchAction: 'none' }}>
-      <Canvas camera={{ position: [0, 0.5, 5], fov: 40 }} shadows gl={{ antialias: true }}>
-        <color attach="background" args={['#f5f5f7']} />
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[3, 5, 3]} intensity={1.2} castShadow />
-        <pointLight position={[-3, 2, 2]} intensity={0.5} color="#ffffff" />
-        <pointLight position={[0, -2, 2]} intensity={0.3} color="#e0e8ff" />
+  const mountRef    = useRef<HTMLDivElement>(null)
+  const sceneRef    = useRef<{
+    renderer: THREE.WebGLRenderer
+    scene:    THREE.Scene
+    camera:   THREE.PerspectiveCamera
+    head:     THREE.Group
+    body:     THREE.Group
+    oled:     THREE.Mesh
+    antenna:  THREE.Mesh
+    raf:      number
+  } | null>(null)
 
-        <RobotScene expression={expression} state={state} servoAngle={servoAngle} />
+  // Init Three.js une seule fois
+  useEffect(() => {
+    if (!mountRef.current) return
+    const el = mountRef.current
+    const W = el.clientWidth  || 600
+    const H = el.clientHeight || 480
 
-        <OrbitControls
-          enablePan={false}
-          minDistance={3}
-          maxDistance={8}
-          maxPolarAngle={Math.PI / 1.8}
-        />
-      </Canvas>
-    </div>
-  )
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+    renderer.setSize(W, H)
+    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.shadowMap.enabled = true
+    renderer.setClearColor(0xf5f5f7)
+    el.appendChild(renderer.domElement)
+
+    // Scene + Camera
+    const scene  = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(40, W / H, 0.1, 100)
+    camera.position.set(0, 0.5, 5.5)
+
+    // Lumières
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7))
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2)
+    dirLight.position.set(3, 5, 3)
+    dirLight.castShadow = true
+    scene.add(dirLight)
+    const fillLight = new THREE.PointLight(0xe0e8ff, 0.4)
+    fillLight.position.set(-3, 2, 2)
+    scene.add(fillLight)
+
+    // Matériaux
+    const matBody   = new THREE.MeshStandardMaterial({ color: 0xe8e8ed, roughness: 0.3, metalness: 0.1 })
+    const matArm    = new THREE.MeshStandardMaterial({ color: 0xd2d2d7, roughness: 0.4 })
+    const matHead   = new THREE.MeshStandardMaterial({ color: 0xf5f5f7, roughness: 0.25, metalness: 0.05 })
+    const matAntenna = new THREE.MeshStandardMaterial({ color: 0x86868b, roughness: 0.5 })
+    const matDot    = new THREE.MeshStandardMaterial({ color: 0x0071e3, emissive: new THREE.Color(0x0071e3), emissiveIntensity: 0.4 })
+    const matOled   = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, emissive: new THREE.Color(0xaaaaaa), emissiveIntensity: 1.0, roughness: 0.05 })
+
+    const box = (w: number, h: number, d: number, mat: THREE.Material) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
+      m.castShadow = true
+      return m
+    }
+    const cyl = (r: number, h: number, mat: THREE.Material) =>
+      new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 12), mat)
+    const sph = (r: number, mat: THREE.Material) =>
+      new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), mat)
+
+    // Corps
+    const body = new THREE.Group()
+    const torso = box(1.2, 1.6, 0.8, matBody)
+    body.add(torso)
+    const armL = box(0.18, 0.8, 0.18, matArm); armL.position.set(-0.75, 0, 0); body.add(armL)
+    const armR = box(0.18, 0.8, 0.18, matArm); armR.position.set( 0.75, 0, 0); body.add(armR)
+    const base = box(0.9, 0.25, 0.7, matArm);  base.position.set(0, -1.0, 0);  body.add(base)
+
+    // Tête
+    const head   = new THREE.Group()
+    const skull  = box(0.9, 0.85, 0.75, matHead); head.add(skull)
+    const oled   = box(0.55, 0.38, 0.01, matOled); oled.position.set(0, 0.05, 0.385); head.add(oled)
+    const ant    = cyl(0.025, 0.35, matAntenna); ant.position.set(0, 0.6, 0); head.add(ant)
+    const dot    = sph(0.05, matDot);             dot.position.set(0, 0.78, 0); head.add(dot)
+    head.position.set(0, 1.1, 0)
+    body.add(head)
+
+    // Float offset
+    body.position.set(0, -0.3, 0)
+    scene.add(body)
+
+    sceneRef.current = { renderer, scene, camera, head, body, oled, antenna: dot, raf: 0 }
+
+    // Resize
+    const onResize = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      renderer.setSize(w, h)
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+    }
+    window.addEventListener('resize', onResize)
+
+    // Basic orbit (drag)
+    let isDragging = false, prevX = 0
+    const onDown  = (e: MouseEvent) => { isDragging = true; prevX = e.clientX }
+    const onUp    = ()               => { isDragging = false }
+    const onMove  = (e: MouseEvent) => {
+      if (!isDragging) return
+      body.rotation.y += (e.clientX - prevX) * 0.01
+      prevX = e.clientX
+    }
+    renderer.domElement.addEventListener('mousedown', onDown)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('mousemove', onMove)
+
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('mousemove', onMove)
+      cancelAnimationFrame(sceneRef.current?.raf ?? 0)
+      renderer.dispose()
+      el.removeChild(renderer.domElement)
+      sceneRef.current = null
+    }
+  }, [])
+
+  // Réagir aux props sans recréer la scène
+  useEffect(() => {
+    const s = sceneRef.current
+    if (!s) return
+
+    const targetOledColor = new THREE.Color(OLED_COLORS[expression])
+    const targetHeadY = THREE.MathUtils.degToRad(-(servoAngle - 90))
+    let t = 0
+
+    cancelAnimationFrame(s.raf)
+
+    const animate = () => {
+      s.raf = requestAnimationFrame(animate)
+      t += 0.016
+
+      // Float
+      s.body.position.y = -0.3 + Math.sin(t * 1.5) * 0.06
+
+      // State animations
+      if (state === 'danse') {
+        s.body.rotation.z = Math.sin(t * 4) * 0.15
+        s.body.position.y = Math.sin(t * 4) * 0.1
+      } else if (state === 'parle') {
+        s.body.rotation.z = Math.sin(t * 6) * 0.02
+      } else {
+        s.body.rotation.z *= 0.95
+      }
+
+      // Tête servo
+      s.head.rotation.y += (targetHeadY - s.head.rotation.y) * 0.08
+
+      // OLED couleur
+      const oledMat = s.oled.material as THREE.MeshStandardMaterial
+      oledMat.color.lerp(targetOledColor, 0.05)
+      oledMat.emissive.lerp(targetOledColor, 0.05)
+
+      // Antenne pulse si écoute
+      const antMat = s.antenna.material as THREE.MeshStandardMaterial
+      antMat.emissiveIntensity = state === 'ecoute'
+        ? 0.5 + Math.sin(t * 6) * 0.5
+        : 0.4
+
+      s.renderer.render(s.scene, s.camera)
+    }
+
+    animate()
+  }, [expression, state, servoAngle])
+
+  return <div ref={mountRef} className={className} style={{ touchAction: 'none' }} />
 }
