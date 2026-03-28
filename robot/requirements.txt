@@ -1,0 +1,7 @@
+flask>=3.0.0
+whisper @ git+https://github.com/openai/whisper.git
+sounddevice>=0.4.6
+numpy>=1.24.0
+requests>=2.31.0
+piper-tts>=1.2.0
+duckduckgo-search>=6.0.0
