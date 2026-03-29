@@ -36,7 +36,8 @@ services:
       - NEO_API_KEY=${NEO_API_KEY}
       - NEO_MQTT_HOST=mosquitto
       - NEO_MQTT_PORT=1883
-      - NEO_OPENCLAW_WS=ws://host.docker.internal:18789
+      - NEO_OPENCLAW_URL=http://host.docker.internal:18790
+      - NEO_OPENCLAW_TOKEN=48456fb15f32065747b6d2c540179d1dac3c67773521c6d3ebbe70268d63e8fa
       - SECRET_KEY=${SECRET_KEY:-neo-secret-change-me}
     extra_hosts:
       - "host.docker.internal:host-gateway"

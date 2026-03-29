@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mic, MicOff, RotateCcw, WifiOff, Square } from 'lucide-react'
+import { Mic, MicOff, RotateCcw, WifiOff, Square, Trash2 } from 'lucide-react'
 
 type Message = {
   id: string
@@ -97,6 +97,13 @@ export default function ConversationPage() {
   // ── Mode continu ──────────────────────────────────────────
   async function toggleModeContinue() {
     await fetch('/api/flask/toggle_continu', { method: 'POST' })
+  }
+
+  // ── Effacer mémoire conversationnelle ─────────────────────
+  async function clearMemory() {
+    setMessages([])
+    lastCountRef.current = 0
+    await fetch('/api/flask/clear_history', { method: 'POST' })
   }
 
   // ── Microphone navigateur ─────────────────────────────────
@@ -199,6 +206,13 @@ export default function ConversationPage() {
             <RotateCcw className="w-4 h-4" />
           </button>
           <button
+            onClick={clearMemory}
+            className="p-2 text-[#86868b] hover:text-[#ff3b30] hover:bg-white rounded-xl transition-all"
+            title="Effacer la mémoire de NEO (nouvelle conversation)"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+          <button
             onClick={toggleModeContinue}
             className={`flex items-center gap-2 px-3 py-2 rounded-xl font-medium text-sm transition-all ${
               modeContinue
@@ -255,6 +269,31 @@ export default function ConversationPage() {
               </div>
             </motion.div>
           ))}
+
+          {/* Bulle "réfléchit" — points animés */}
+          {!partial && effectiveStatus === 'reflechit' && (
+            <motion.div
+              key="thinking"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex justify-start"
+            >
+              <div className="max-w-[80%] flex flex-col gap-1 items-start">
+                <span className="text-[10px] text-[#ff9500] font-medium px-1">ARIA ◎</span>
+                <div className="px-4 py-3 rounded-2xl rounded-bl-sm bg-white border border-[#ff9500]/25 shadow-sm flex items-center gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <motion.span
+                      key={i}
+                      className="w-2 h-2 rounded-full bg-[#ff9500]"
+                      animate={{ opacity: [0.3, 1, 0.3], y: [0, -4, 0] }}
+                      transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.2 }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
 
           {/* Bulle streaming partielle */}
           {partial && (

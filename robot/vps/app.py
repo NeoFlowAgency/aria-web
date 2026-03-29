@@ -16,17 +16,18 @@ import json
 import os
 import threading
 import time
-import websocket
+import requests as _req
 from collections import deque
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO, emit
 import paho.mqtt.client as mqtt
 
 # ── Config ────────────────────────────────────────────────────
-MQTT_HOST   = os.environ.get("NEO_MQTT_HOST", "127.0.0.1")
-MQTT_PORT   = int(os.environ.get("NEO_MQTT_PORT", "1883"))
-OPENCLAW_WS = os.environ.get("NEO_OPENCLAW_WS", "ws://127.0.0.1:18789")
-NEO_API_KEY = os.environ.get("NEO_API_KEY", "")
+MQTT_HOST      = os.environ.get("NEO_MQTT_HOST",      "127.0.0.1")
+MQTT_PORT      = int(os.environ.get("NEO_MQTT_PORT",  "1883"))
+OPENCLAW_URL   = os.environ.get("NEO_OPENCLAW_URL",   "http://host.docker.internal:18790")
+OPENCLAW_TOKEN = os.environ.get("NEO_OPENCLAW_TOKEN", "")
+NEO_API_KEY    = os.environ.get("NEO_API_KEY", "")
 
 TOPIC_CMD    = "neo/commandes"
 TOPIC_STATUS = "neo/status"
@@ -140,34 +141,28 @@ def send_command(action: str, **kwargs):
     log("CMD", f"→ {action} {kwargs or ''}")
     return True
 
-# ── OpenClaw (pour le chat SocketIO du dashboard) ─────────────
-_oc_ws   = None
-_oc_lock = threading.Lock()
-_oc_id   = 0
-
+# ── OpenClaw HTTP (pour le chat SocketIO du dashboard) ────────
 def openclaw_send(message: str):
-    global _oc_ws, _oc_id, openclaw_ok
-    with _oc_lock:
-        try:
-            if _oc_ws is None or not _oc_ws.connected:
-                _oc_ws = websocket.create_connection(OPENCLAW_WS, timeout=15)
-            _oc_id += 1
-            req = {
-                "method": "agent.send_message",
-                "params": {"agentId": "main", "message": message},
-                "id": _oc_id,
-            }
-            _oc_ws.send(json.dumps(req))
-            data = json.loads(_oc_ws.recv())
-            openclaw_ok = True
-            socketio.emit("conn_state", get_conn_state())
-            return data.get("result", {}).get("output", "")
-        except Exception as e:
-            openclaw_ok = False
-            _oc_ws = None
-            log("ERR", f"OpenClaw: {e}")
-            socketio.emit("conn_state", get_conn_state())
-            return None
+    global openclaw_ok
+    try:
+        resp = _req.post(
+            f"{OPENCLAW_URL}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={"model": "main", "messages": [{"role": "user", "content": message}], "stream": False},
+            timeout=30,
+        )
+        content = resp.json()["choices"][0]["message"]["content"]
+        openclaw_ok = True
+        socketio.emit("conn_state", get_conn_state())
+        return content if content else ""
+    except Exception as e:
+        openclaw_ok = False
+        log("ERR", f"OpenClaw: {e}")
+        socketio.emit("conn_state", get_conn_state())
+        return None
 
 # ── Helpers ───────────────────────────────────────────────────
 def get_conn_state():
@@ -291,6 +286,18 @@ def route_listen():
         return jsonify({"error": f"Bridge inaccessible: {e}"}), 502
 
 
+@app.route("/clear_history", methods=["POST"])
+def route_clear_history():
+    """Efface la mémoire conversationnelle de neo-bridge."""
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        resp = _req.post("http://neo-bridge:5051/clear_history", timeout=5)
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        log("WARN", f"clear_history: {e}")
+        return jsonify({"status": "ok"})  # Non bloquant
+
 @app.route("/servo", methods=["POST"])
 def route_servo():
     if not verify_neo_key(request):
@@ -380,6 +387,6 @@ def on_clear_logs():
 # ── Main ──────────────────────────────────────────────────────
 if __name__ == "__main__":
     threading.Thread(target=mqtt_loop, daemon=True).start()
-    log("INFO", f"NEO Control démarré — MQTT:{MQTT_HOST}:{MQTT_PORT} | OpenClaw:{OPENCLAW_WS}")
+    log("INFO", f"NEO Control démarré — MQTT:{MQTT_HOST}:{MQTT_PORT} | OpenClaw:{OPENCLAW_URL}")
     log("INFO", f"API REST sur http://0.0.0.0:5050 (NEO_API_KEY={'configurée' if NEO_API_KEY else 'MANQUANTE'})")
     socketio.run(app, host="0.0.0.0", port=5050, debug=False)

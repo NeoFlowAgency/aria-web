@@ -49,7 +49,22 @@ TOPIC_STATE    = "neo/state"
 
 OPENCLAW_URL   = os.environ.get("OPENCLAW_URL",   "http://host.docker.internal:18790")
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", "")
-TTS_VOICE   = "fr-FR-DeniseNeural"
+TTS_VOICE      = "fr-FR-DeniseNeural"
+
+# ── Prompt système ──────────────────────────────────────────
+SYSTEM_PROMPT = (
+    "Tu es NEO, un robot IA physique créé par Noakim. "
+    "Tu parles français, tu es curieux, expressif et chaleureux. "
+    "Utilise des balises d'émotion selon ton humeur : "
+    "[content], [triste], [surpris], [colere], [amoureux], [neutre]. "
+    "Tu peux aussi utiliser [danse] pour danser ou [hoche] pour hocher la tête. "
+    "Garde tes réponses courtes (1-3 phrases max), adaptées à une conversation vocale."
+)
+
+# ── Historique de conversation ──────────────────────────────
+_conv_history: list[dict] = []
+_conv_lock = threading.Lock()
+MAX_HISTORY = 8  # paires user/assistant conservées
 
 MIC_SAMPLE_RATE = 16000    # ESP32 enregistre en 16kHz
 OUT_SAMPLE_RATE = 22050    # ESP32 joue en 22050Hz
@@ -75,8 +90,15 @@ audio_buf: list[bytes] = []
 last_voice_time = time.time()
 mic_recording   = False   # True quand esp32 envoie (après mic_ctl start)
 
-# ── OpenClaw HTTP ──────────────────────────────────────────────
+# ── OpenClaw HTTP avec mémoire conversationnelle ──────────────
 def openclaw_ask(text: str) -> str:
+    global _conv_history
+    with _conv_lock:
+        _conv_history.append({"role": "user", "content": text})
+        if len(_conv_history) > MAX_HISTORY * 2:
+            _conv_history = _conv_history[-(MAX_HISTORY * 2):]
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(_conv_history)
+
     try:
         resp = _req.post(
             f"{OPENCLAW_URL}/v1/chat/completions",
@@ -84,17 +106,19 @@ def openclaw_ask(text: str) -> str:
                 "Authorization": f"Bearer {OPENCLAW_TOKEN}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": "main",
-                "messages": [{"role": "user", "content": text}],
-                "stream": False,
-            },
+            json={"model": "main", "messages": messages, "stream": False},
             timeout=30,
         )
         content = resp.json()["choices"][0]["message"]["content"]
-        return content if content else "Désolé, je n'ai pas pu formuler de réponse."
+        result = content if content else "Désolé, je n'ai pas pu formuler de réponse."
+        with _conv_lock:
+            _conv_history.append({"role": "assistant", "content": result})
+        return result
     except Exception as e:
         print(f"[OpenClaw] Erreur: {e}")
+        with _conv_lock:
+            if _conv_history and _conv_history[-1]["role"] == "user":
+                _conv_history.pop()
         return "Désolé, problème de connexion avec mon cerveau."
 
 # ── TTS + envoi MQTT ───────────────────────────────────────────
@@ -437,6 +461,16 @@ def _listen_speak(text: str, client: mqtt.Client):
         _processing = False
         publish_state(client, "repos", partial="")
         client.publish(TOPIC_CMD, json.dumps({"action": "repos"}))
+
+
+@_bridge_http.route("/clear_history", methods=["POST"])
+def bridge_clear_history():
+    """Efface l'historique de conversation (réinitialise la mémoire de NEO)."""
+    global _conv_history
+    with _conv_lock:
+        _conv_history.clear()
+    print("[Bridge] Historique de conversation effacé")
+    return _bjson({"status": "ok"})
 
 
 def _start_http():
