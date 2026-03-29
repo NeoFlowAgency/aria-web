@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { isAuthenticated } from '@/lib/auth'
 
-const FLASK_URL = process.env.FLASK_API_URL ?? 'http://localhost:5000'
-const API_KEY = process.env.API_KEY ?? ''
+const FLASK_URL = process.env.FLASK_API_URL ?? 'http://localhost:5050'
+const API_KEY   = process.env.NEO_API_KEY   ?? ''
 
 type Params = { path: string[] }
 
@@ -22,7 +22,7 @@ async function proxyToFlask(
   const targetUrl = `${FLASK_URL}${flaskPath}${queryString}`
 
   const headers: Record<string, string> = {
-    'X-API-Key': API_KEY,
+    'X-NEO-Key': API_KEY,
     'Content-Type': 'application/json',
   }
 

@@ -1,0 +1,75 @@
+version: '3.8'
+
+# ══════════════════════════════════════════════════════════════
+# Stack complète NEO — à déployer sur le VPS
+# Place ce fichier dans /root/neo/ et lance :  docker compose up -d
+#
+# Expositions :
+#   • 1883  → Mosquitto MQTT (ESP32 + services internes)
+#   • 5050  → neo-control API REST + SocketIO (accessible web)
+#   • 8090  → neo-control (via Traefik si configuré)
+# ══════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Broker MQTT ──────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: neo_mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
+  # ── Serveur de contrôle + API REST ───────────────────────────
+  neo-control:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    container_name: neo_control
+    ports:
+      - "5050:5050"
+    environment:
+      - NEO_API_KEY=${NEO_API_KEY}
+      - NEO_MQTT_HOST=mosquitto
+      - NEO_MQTT_PORT=1883
+      - NEO_OPENCLAW_WS=ws://host.docker.internal:18789
+      - SECRET_KEY=${SECRET_KEY:-neo-secret-change-me}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+    # Traefik labels (décommenter si Traefik est configuré)
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.neo-api.rule=Host(`neo.srv1137119.hstgr.cloud`)"
+    #   - "traefik.http.routers.neo-api.entrypoints=websecure"
+    #   - "traefik.http.routers.neo-api.tls.certresolver=letsencrypt"
+    #   - "traefik.http.services.neo-api.loadbalancer.server.port=5050"
+
+  # ── Pipeline audio STT → OpenClaw → TTS ──────────────────────
+  neo-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    container_name: neo_bridge
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - OPENCLAW_URL=http://host.docker.internal:18790
+      - OPENCLAW_TOKEN=48456fb15f32065747b6d2c540179d1dac3c67773521c6d3ebbe70268d63e8fa
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+    # Whisper télécharge les modèles au premier démarrage (~500MB)
+    volumes:
+      - whisper_cache:/root/.cache
+
+volumes:
+  whisper_cache:

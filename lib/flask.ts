@@ -3,8 +3,9 @@
  * Utilisé par les routes /api/neo/* pour communiquer avec le serveur local.
  */
 
-const FLASK_URL = process.env.FLASK_API_URL ?? 'http://localhost:5000'
-const FLASK_KEY  = process.env.API_KEY ?? ''
+// FLASK_API_URL pointe maintenant vers le VPS (ex: http://72.61.111.8:5050)
+const FLASK_URL = process.env.FLASK_API_URL ?? 'http://localhost:5050'
+const FLASK_KEY = process.env.NEO_API_KEY   ?? ''
 
 export interface FlaskResult {
   ok:     boolean
@@ -22,7 +23,7 @@ export async function flaskCall(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-API-Key':    FLASK_KEY,
+    'X-NEO-Key':    FLASK_KEY,
   }
 
   const init: RequestInit = { method, headers, signal: AbortSignal.timeout(timeoutMs) }

@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+# ffmpeg requis par pydub pour décoder le MP3 d'edge-tts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir faster-whisper edge-tts pydub paho-mqtt requests flask
+
+COPY neo_bridge.py .
+
+CMD ["python", "neo_bridge.py"]

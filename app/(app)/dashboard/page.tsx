@@ -73,7 +73,7 @@ export default function DashboardPage() {
               <WifiOff className="w-4 h-4 text-[#ff3b30] flex-shrink-0" />
               <div>
                 <p className="text-sm font-medium text-[#ff3b30]">Robot hors ligne</p>
-                <p className="text-[11px] text-[#86868b]">Vérifie le tunnel Cloudflare</p>
+                <p className="text-[11px] text-[#86868b]">Vérifie la connexion VPS</p>
               </div>
             </>
           ) : (
