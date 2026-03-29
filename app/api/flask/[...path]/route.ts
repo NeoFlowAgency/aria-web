@@ -44,8 +44,9 @@ async function proxyToFlask(
       status: res.status,
       headers: { 'Content-Type': res.headers.get('Content-Type') ?? 'application/json' },
     })
-  } catch {
-    return NextResponse.json({ error: 'Flask unreachable' }, { status: 502 })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: 'Flask unreachable', detail: msg }, { status: 502 })
   }
 }
 
