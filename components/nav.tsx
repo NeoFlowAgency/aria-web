@@ -9,6 +9,7 @@ const links = [
   { href: '/conversation', label: 'Conversation' },
   { href: '/robot', label: 'Robot 3D' },
   { href: '/clavier', label: 'Contrôles' },
+  { href: '/chat', label: 'Chat IA' },
 ]
 
 export default function Nav() {

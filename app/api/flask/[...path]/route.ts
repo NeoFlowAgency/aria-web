@@ -77,3 +77,10 @@ export async function DELETE(
 ) {
   return proxyToFlask(request, await params, 'DELETE')
 }
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<Params> }
+) {
+  return proxyToFlask(request, await params, 'PATCH')
+}

@@ -14,8 +14,11 @@ Variables d'environnement :
 
 import json
 import os
+import pathlib
+import re as _re
 import threading
 import time
+import uuid
 import requests as _req
 from collections import deque
 from flask import Flask, jsonify, render_template, request, send_from_directory
@@ -28,6 +31,67 @@ MQTT_PORT      = int(os.environ.get("NEO_MQTT_PORT",  "1883"))
 OPENCLAW_URL   = os.environ.get("NEO_OPENCLAW_URL",   "http://host.docker.internal:18790")
 OPENCLAW_TOKEN = os.environ.get("NEO_OPENCLAW_TOKEN", "")
 NEO_API_KEY    = os.environ.get("NEO_API_KEY", "")
+
+# ── Sessions persistantes ─────────────────────────────────────
+DATA_DIR      = pathlib.Path(os.environ.get("DATA_DIR", "/app/data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+SESSIONS_FILE = DATA_DIR / "sessions.json"
+
+SYSTEM_PROMPT = (
+    "Tu es NEO, un robot IA physique créé par Noakim. "
+    "Tu parles français, tu es curieux, expressif et chaleureux. "
+    "Utilise des balises d'émotion selon ton humeur : "
+    "[content], [triste], [surpris], [colere], [amoureux], [neutre]. "
+    "Tu peux aussi utiliser [danse] pour danser ou [hoche] pour hocher la tête. "
+    "Garde tes réponses claires et naturelles."
+)
+
+_sessions: dict[str, dict] = {}
+_active_session_id: str | None = None
+_sessions_lock = threading.Lock()
+
+def _tag_clean(text: str) -> str:
+    return _re.sub(r"\[.*?\]", "", text).strip()
+
+def _tag_emotion(text: str) -> str | None:
+    for em in ["content", "triste", "surpris", "colere", "amoureux", "neutre"]:
+        if f"[{em}]" in text.lower():
+            return em
+    return None
+
+def _tag_motion(text: str) -> str | None:
+    if "[danse]" in text.lower(): return "danse"
+    if "[hoche]" in text.lower(): return "hoche"
+    return None
+
+def _load_sessions():
+    global _sessions
+    if SESSIONS_FILE.exists():
+        try:
+            with open(SESSIONS_FILE, encoding="utf-8") as f:
+                _sessions = json.load(f)
+        except Exception as e:
+            print(f"[Sessions] Erreur chargement: {e}")
+            _sessions = {}
+
+def _save_sessions():
+    try:
+        with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_sessions, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Sessions] Erreur sauvegarde: {e}")
+
+def _session_summary(s: dict) -> dict:
+    msgs = s.get("messages", [])
+    last = msgs[-1]["text"][:80] if msgs else ""
+    return {
+        "id":            s["id"],
+        "name":          s["name"],
+        "created_at":    s["created_at"],
+        "updated_at":    s["updated_at"],
+        "message_count": len(msgs),
+        "last_message":  last,
+    }
 
 TOPIC_CMD    = "neo/commandes"
 TOPIC_STATUS = "neo/status"
@@ -108,15 +172,25 @@ def on_mqtt_message(client, userdata, msg):
         # Mise à jour d'état depuis neo-bridge
         try:
             data = json.loads(msg.payload.decode("utf-8"))
+            new_msg = None
             with _state_lock:
                 if "etat"         in data: _etat         = data["etat"]
                 if "mode_continu" in data: _mode_continu = data["mode_continu"]
                 if "partial"      in data: _partial       = data["partial"]
                 if "message"      in data:
                     _messages.append(data["message"])
+                    new_msg = data["message"]
             socketio.emit("robot_state", {
                 "etat": _etat, "mode_continu": _mode_continu, "partial": _partial,
             })
+            # Ajouter le message vocal à la session active
+            if new_msg is not None and _active_session_id:
+                with _sessions_lock:
+                    session = _sessions.get(_active_session_id)
+                    if session:
+                        session["messages"].append(new_msg)
+                        session["updated_at"] = int(time.time())
+                _save_sessions()
         except Exception as e:
             log("ERR", f"MQTT state parse: {e}")
 
@@ -286,6 +360,147 @@ def route_listen():
         return jsonify({"error": f"Bridge inaccessible: {e}"}), 502
 
 
+# ══════════════════════════════════════════════════════════════
+# SESSIONS REST API
+# ══════════════════════════════════════════════════════════════
+
+@app.route("/sessions", methods=["GET"])
+def route_sessions_list():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    with _sessions_lock:
+        summaries = sorted(
+            [_session_summary(s) for s in _sessions.values()],
+            key=lambda x: x["updated_at"], reverse=True
+        )
+    return jsonify({"sessions": summaries, "active": _active_session_id})
+
+@app.route("/sessions", methods=["POST"])
+def route_sessions_create():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    with _sessions_lock:
+        sid = str(uuid.uuid4())[:8]
+        now = int(time.time())
+        session = {
+            "id":         sid,
+            "name":       name or f"Conversation {len(_sessions) + 1}",
+            "created_at": now,
+            "updated_at": now,
+            "messages":   []
+        }
+        _sessions[sid] = session
+    _save_sessions()
+    log("INFO", f"Session créée: {session['name']} ({sid})")
+    return jsonify(_session_summary(session)), 201
+
+@app.route("/sessions/active", methods=["GET", "POST"])
+def route_session_active():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    global _active_session_id
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        sid = data.get("id")
+        with _sessions_lock:
+            if sid and sid not in _sessions:
+                return jsonify({"error": "Session introuvable"}), 404
+        _active_session_id = sid
+    return jsonify({"active": _active_session_id})
+
+@app.route("/sessions/<sid>", methods=["GET"])
+def route_session_get(sid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    with _sessions_lock:
+        session = _sessions.get(sid)
+    if not session:
+        return jsonify({"error": "Session introuvable"}), 404
+    return jsonify(session)
+
+@app.route("/sessions/<sid>", methods=["PATCH"])
+def route_session_patch(sid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    with _sessions_lock:
+        session = _sessions.get(sid)
+        if not session:
+            return jsonify({"error": "Session introuvable"}), 404
+        if "name" in data:
+            session["name"] = str(data["name"]).strip()[:80]
+    _save_sessions()
+    return jsonify(_session_summary(session))
+
+@app.route("/sessions/<sid>", methods=["DELETE"])
+def route_session_delete(sid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    global _active_session_id
+    with _sessions_lock:
+        if sid not in _sessions:
+            return jsonify({"error": "Session introuvable"}), 404
+        del _sessions[sid]
+        if _active_session_id == sid:
+            _active_session_id = None
+    _save_sessions()
+    return jsonify({"status": "ok"})
+
+@app.route("/sessions/<sid>/chat", methods=["POST"])
+def route_session_chat(sid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    with _sessions_lock:
+        session = _sessions.get(sid)
+        if not session:
+            return jsonify({"error": "Session introuvable"}), 404
+        history_slice = list(session["messages"][-40:])  # 20 derniers échanges
+
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", "")).strip()
+    robot_emotions = bool(data.get("robot_emotions", True))
+
+    if not text:
+        return jsonify({"error": "Champ 'text' requis"}), 400
+
+    messages_oc = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in history_slice:
+        role = "user" if m["role"] == "user" else "assistant"
+        messages_oc.append({"role": role, "content": m["text"]})
+    messages_oc.append({"role": "user", "content": text})
+
+    try:
+        resp = _req.post(
+            f"{OPENCLAW_URL}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}", "Content-Type": "application/json"},
+            json={"model": "main", "messages": messages_oc, "stream": False},
+            timeout=30,
+        )
+        reply_raw   = resp.json()["choices"][0]["message"]["content"]
+        reply_clean = _tag_clean(reply_raw)
+
+        if robot_emotions and mqtt_connected:
+            emotion = _tag_emotion(reply_raw)
+            motion  = _tag_motion(reply_raw)
+            if emotion: send_command("emotion", valeur=emotion)
+            if motion:  send_command(motion)
+
+        ts = int(time.time())
+        with _sessions_lock:
+            session["messages"].append({"role": "user",  "text": text,        "ts": ts})
+            session["messages"].append({"role": "aria",  "text": reply_clean, "ts": ts + 1})
+            session["updated_at"] = ts
+        _save_sessions()
+
+        log("CHAT", f"[{sid}] {text[:40]!r} → {reply_clean[:40]!r}")
+        return jsonify({"reply": reply_clean, "ts": ts + 1})
+
+    except Exception as e:
+        log("ERR", f"session_chat {sid}: {e}")
+        return jsonify({"error": str(e)}), 502
+
 @app.route("/clear_history", methods=["POST"])
 def route_clear_history():
     """Efface la mémoire conversationnelle de neo-bridge."""
@@ -386,6 +601,8 @@ def on_clear_logs():
 
 # ── Main ──────────────────────────────────────────────────────
 if __name__ == "__main__":
+    _load_sessions()
+    log("INFO", f"{len(_sessions)} session(s) chargée(s)")
     threading.Thread(target=mqtt_loop, daemon=True).start()
     log("INFO", f"NEO Control démarré — MQTT:{MQTT_HOST}:{MQTT_PORT} | OpenClaw:{OPENCLAW_URL}")
     log("INFO", f"API REST sur http://0.0.0.0:5050 (NEO_API_KEY={'configurée' if NEO_API_KEY else 'MANQUANTE'})")

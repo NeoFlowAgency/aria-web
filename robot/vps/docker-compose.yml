@@ -41,6 +41,8 @@ services:
       - SECRET_KEY=${SECRET_KEY:-neo-secret-change-me}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
     depends_on:
       - mosquitto
     restart: unless-stopped
