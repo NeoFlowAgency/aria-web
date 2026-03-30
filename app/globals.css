@@ -21,6 +21,13 @@
   --neo-pink:        #F472B6;
   --nav-h-mobile:    64px;
   --nav-h-desktop:   56px;
+  --nav-h:           64px; /* mobile default */
+}
+
+@media (min-width: 768px) {
+  :root {
+    --nav-h: 56px;
+  }
 }
 
 * {

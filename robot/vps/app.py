@@ -188,7 +188,8 @@ def on_mqtt_message(client, userdata, msg):
                 with _sessions_lock:
                     session = _sessions.get(_active_session_id)
                     if session:
-                        session["messages"].append(new_msg)
+                        tagged_msg = {**new_msg, "source": "voice"}
+                        session["messages"].append(tagged_msg)
                         session["updated_at"] = int(time.time())
                 _save_sessions()
         except Exception as e:
@@ -495,8 +496,8 @@ def route_session_chat(sid: str):
 
         ts = int(time.time())
         with _sessions_lock:
-            session["messages"].append({"role": "user",  "text": text,        "ts": ts})
-            session["messages"].append({"role": "aria",  "text": reply_clean, "ts": ts + 1})
+            session["messages"].append({"role": "user",  "text": text,        "ts": ts,     "source": "text"})
+            session["messages"].append({"role": "aria",  "text": reply_clean, "ts": ts + 1, "source": "text"})
             session["updated_at"] = ts
         _save_sessions()
 

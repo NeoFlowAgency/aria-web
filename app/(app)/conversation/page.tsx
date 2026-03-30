@@ -1,807 +1,681 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Plus, Trash2, Edit2, Check, X, MoreHorizontal,
-  Mic, MicOff, Square, WifiOff, PanelLeft, Send,
-  Smartphone, Radio,
+  Radio, Smartphone, FileText, HelpCircle, CheckSquare,
+  Send, Mic, MicOff, Plus, Trash2, Edit3,
+  Check, X, ChevronDown, Wifi, WifiOff, Bot, Layers,
+  DollarSign,
 } from 'lucide-react'
 
-// ── Types ──────────────────────────────────────────────────────────────────
-type Session   = { id: string; name: string; created_at: number; updated_at: number; message_count: number; last_message: string }
-type Message   = { id: string; role: 'user' | 'aria'; text: string; ts: number; source?: 'text' | 'voice' }
-type ARIAStatus = 'repos' | 'ecoute' | 'reflechit' | 'parle'
-type MicState  = 'idle' | 'recording' | 'processing'
+// ── Types ────────────────────────────────────────────────────────────────────
 
-const STATUS_COLOR: Record<ARIAStatus, string> = {
-  repos: '#4A4A60', ecoute: '#818CF8', reflechit: '#FBBF24', parle: '#34D399',
+type MsgSource = 'text' | 'voice'
+type MsgType   = 'rapport' | 'question' | 'approbation' | 'financier' | 'vocal' | 'user'
+
+interface RawMsg {
+  role: string; text: string; ts: number; source?: MsgSource
 }
-const STATUS_LABEL: Record<ARIAStatus, string> = {
-  repos: 'En veille', ecoute: 'Écoute…', reflechit: 'Réfléchit…', parle: 'Parle…',
+
+interface FlowMsg extends RawMsg {
+  _type: MsgType
+  _key: string
 }
-const SUGGESTIONS = [
-  'Comment tu vas ?', 'Qu\'est-ce que je dois faire aujourd\'hui ?',
-  'Fais-moi danser !', 'Résume ma semaine.',
+
+interface Session {
+  id: string; name: string; created_at: number; updated_at: number
+  message_count: number; last_message: string
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+const PROJECTS = [
+  { id: 'neoflow', label: 'Neoflow Agency', color: '#818CF8', icon: '🏢' },
+  { id: 'bos',     label: 'NeoFlow BOS',    color: '#34D399', icon: '⚙️' },
+  { id: 'horizon', label: 'Horizon Drone',  color: '#60A5FA', icon: '🚁' },
+  { id: 'vie',     label: 'Vie Perso',      color: '#F472B6', icon: '🌿' },
+  { id: 'global',  label: 'Général',        color: '#8B8BA0', icon: '💬' },
 ]
 
-function fmtDate(ts: number) {
-  const d = new Date(ts * 1000), diff = Date.now() - d.getTime()
-  if (diff < 60_000)     return 'À l\'instant'
-  if (diff < 3_600_000)  return `${Math.floor(diff / 60_000)} min`
-  if (diff < 86_400_000) return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+// ── Type detection ────────────────────────────────────────────────────────────
+
+function detectType(msg: RawMsg): MsgType {
+  if (msg.role === 'user') return 'user'
+  if (msg.source === 'voice') return 'vocal'
+  const t = msg.text
+  if (t.includes('?')) return 'question'
+  if (/(approuv|valid|confirm|autoris)/i.test(t)) return 'approbation'
+  if (/(€|\$|budget|coût|facture|paiement|prix|tarif)/i.test(t)) return 'financier'
+  return 'rapport'
 }
-function fmtTime(ts: number) {
+
+function enrich(msgs: RawMsg[]): FlowMsg[] {
+  return msgs.map((m, i) => ({ ...m, _type: detectType(m), _key: `${m.ts}-${i}` }))
+}
+
+// ── Type config ───────────────────────────────────────────────────────────────
+
+const TYPE_CFG: Record<MsgType, {
+  label: string; color: string; bg: string; border: string
+  Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
+}> = {
+  rapport:     { label: 'RAPPORT',     color: '#818CF8', bg: 'rgba(129,140,248,0.06)', border: 'rgba(129,140,248,0.18)', Icon: FileText },
+  question:    { label: 'QUESTION',    color: '#FBBF24', bg: 'rgba(251,191,36,0.06)',  border: 'rgba(251,191,36,0.22)',  Icon: HelpCircle },
+  approbation: { label: 'APPROBATION', color: '#F87171', bg: 'rgba(248,113,113,0.06)', border: 'rgba(248,113,113,0.22)', Icon: CheckSquare },
+  financier:   { label: 'FINANCIER',   color: '#34D399', bg: 'rgba(52,211,153,0.06)',  border: 'rgba(52,211,153,0.22)',  Icon: DollarSign },
+  vocal:       { label: 'VOCAL',       color: '#A78BFA', bg: 'rgba(167,139,250,0.06)', border: 'rgba(167,139,250,0.22)', Icon: Radio },
+  user:        { label: '',            color: '#5A5A78', bg: 'transparent',            border: 'rgba(255,255,255,0.06)', Icon: Smartphone },
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatTime(ts: number) {
   return new Date(ts * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 }
 
-// ── Composant ──────────────────────────────────────────────────────────────
-export default function ConversationPage() {
-  // Sessions
-  const [sessions,      setSessions]      = useState<Session[]>([])
-  const [activeId,      setActiveId]      = useState<string | null>(null)
-  const [messages,      setMessages]      = useState<Message[]>([])
-  const [sidebarOpen,   setSidebarOpen]   = useState(true)
-  const [renaming,      setRenaming]      = useState<string | null>(null)
-  const [renameName,    setRenameName]    = useState('')
-  const [menuOpen,      setMenuOpen]      = useState<string | null>(null)
-  const [loadingSession, setLoadingSession] = useState(false)
+// ── Message card ─────────────────────────────────────────────────────────────
 
-  // ARIA
-  const [ariaStatus,    setAriaStatus]    = useState<ARIAStatus>('repos')
-  const [partial,       setPartial]       = useState('')
-  const [offline,       setOffline]       = useState(false)
-  const [modeContinue,  setModeContinue]  = useState(false)
+function MessageCard({
+  msg, isLast, onQuickReply,
+}: {
+  msg: FlowMsg
+  isLast: boolean
+  onQuickReply: (text: string) => void
+}) {
+  const cfg = TYPE_CFG[msg._type]
+  const isUser = msg._type === 'user'
 
-  // Input
-  const [input,         setInput]         = useState('')
-  const [sending,       setSending]       = useState(false)
-  const [micState,      setMicState]      = useState<MicState>('idle')
-  const [micError,      setMicError]      = useState<string | null>(null)
-  const [robotEmotions, setRobotEmotions] = useState(true)
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+      className={`mb-3 ${isUser ? 'flex justify-end' : ''}`}
+    >
+      {isUser ? (
+        <div
+          className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-sm text-sm"
+          style={{
+            background: 'var(--neo-surface-2)',
+            border: '1px solid var(--neo-border)',
+            color: 'var(--neo-text)',
+          }}
+        >
+          {msg.text}
+          <div className="text-[10px] mt-1 text-right" style={{ color: 'var(--neo-subtle)' }}>
+            {msg.source === 'voice' && <span className="mr-1">🎤</span>}
+            {formatTime(msg.ts)}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="rounded-2xl overflow-hidden"
+          style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}
+        >
+          {/* Card header */}
+          <div
+            className="flex items-center gap-2 px-4 py-2"
+            style={{ borderBottom: `1px solid ${cfg.border}` }}
+          >
+            <cfg.Icon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: cfg.color }} />
+            <span
+              className="text-[10px] font-bold tracking-widest uppercase"
+              style={{ color: cfg.color }}
+            >
+              {cfg.label}
+            </span>
+            <span className="ml-auto text-[10px]" style={{ color: 'var(--neo-subtle)' }}>
+              {msg.source === 'voice' && <span className="mr-1.5 opacity-60">🤖</span>}
+              {formatTime(msg.ts)}
+            </span>
+          </div>
 
-  // Refs
-  const bottomRef    = useRef<HTMLDivElement>(null)
-  const inputRef     = useRef<HTMLTextAreaElement>(null)
-  const recorderRef  = useRef<MediaRecorder | null>(null)
-  const chunksRef    = useRef<Blob[]>([])
-  const msgCountRef  = useRef(0)
-  const activeIdRef  = useRef<string | null>(null)
+          {/* Card body */}
+          <div className="px-4 py-3">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--neo-text)' }}>
+              {msg.text}
+            </p>
 
-  const effectiveStatus: ARIAStatus = partial ? 'parle' : ariaStatus
-  activeIdRef.current = activeId
+            {/* Quick replies — on last question/approbation only */}
+            {isLast && (msg._type === 'question' || msg._type === 'approbation') && (
+              <div className="flex gap-2 mt-3 flex-wrap">
+                <button
+                  onClick={() => onQuickReply('Oui')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-105 active:scale-95"
+                  style={{ background: cfg.color + '18', border: `1px solid ${cfg.color}40`, color: cfg.color }}
+                >
+                  Oui
+                </button>
+                <button
+                  onClick={() => onQuickReply('Non')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-105 active:scale-95"
+                  style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)', color: '#F87171' }}
+                >
+                  Non
+                </button>
+                <button
+                  onClick={() => onQuickReply('Plus tard')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:scale-105 active:scale-95"
+                  style={{ background: 'var(--neo-surface-2)', border: '1px solid var(--neo-border)', color: 'var(--neo-muted)' }}
+                >
+                  Plus tard
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
 
-  // ── Sessions ──────────────────────────────────────────────────────────────
-  const loadSessions = useCallback(async () => {
+// ── Partial indicator ─────────────────────────────────────────────────────────
+
+function PartialCard({ text }: { text: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-3"
+    >
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{ background: 'rgba(129,140,248,0.04)', border: '1px solid rgba(129,140,248,0.12)' }}
+      >
+        <div className="flex items-center gap-2 px-4 py-2" style={{ borderBottom: '1px solid rgba(129,140,248,0.12)' }}>
+          <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: '#818CF8' }} />
+          <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#818CF8' }}>NEO</span>
+        </div>
+        <div className="px-4 py-3">
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--neo-muted)' }}>
+            {text}
+            <span
+              className="inline-block w-0.5 h-3.5 ml-0.5 align-middle"
+              style={{ background: '#818CF8', animation: 'blink-cursor 1s step-end infinite' }}
+            />
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function FlowPage() {
+  const [sessions,     setSessions]     = useState<Session[]>([])
+  const [activeId,     setActiveId]     = useState<string | null>(null)
+  const [messages,     setMessages]     = useState<FlowMsg[]>([])
+  const [partial,      setPartial]      = useState('')
+  const [neoStatus,    setNeoStatus]    = useState({ etat: 'repos', online: false })
+  const [input,        setInput]        = useState('')
+  const [sending,      setSending]      = useState(false)
+  const [recording,    setRecording]    = useState(false)
+  const [showSessions, setShowSessions] = useState(false)
+  const [showProjects, setShowProjects] = useState(false)
+  const [project,      setProject]      = useState(PROJECTS[0])
+  const [editingId,    setEditingId]    = useState<string | null>(null)
+  const [editName,     setEditName]     = useState('')
+
+  const bottomRef  = useRef<HTMLDivElement>(null)
+  const textRef    = useRef<HTMLTextAreaElement>(null)
+  const mediaRef   = useRef<MediaRecorder | null>(null)
+  const chunksRef  = useRef<BlobPart[]>([])
+  const prevLen    = useRef(0)
+
+  // ── Fetch sessions ──────────────────────────────────────────────────────────
+
+  const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/flask/sessions')
-      if (!res.ok) return
-      const data = await res.json()
-      setSessions(data.sessions ?? [])
+      const r = await fetch('/api/flask/sessions')
+      if (!r.ok) return
+      const d = await r.json()
+      setSessions(d.sessions ?? [])
+      setActiveId(prev => {
+        if (prev) return prev
+        return d.active ?? (d.sessions ?? [])[0]?.id ?? null
+      })
     } catch {}
   }, [])
 
-  useEffect(() => { loadSessions() }, [loadSessions])
+  // ── Poll status ─────────────────────────────────────────────────────────────
 
-  // ── Polling ARIA status ───────────────────────────────────────────────────
   useEffect(() => {
+    fetchSessions()
     const poll = async () => {
       try {
-        const res = await fetch('/api/flask/status')
-        if (!res.ok) { setOffline(true); return }
-        const data = await res.json()
-        setOffline(false)
-        setAriaStatus(data.etat as ARIAStatus)
-        setModeContinue(data.mode_continu ?? false)
-        setPartial(data.partial ?? '')
-      } catch { setOffline(true) }
+        const r = await fetch('/api/flask/status')
+        if (!r.ok) { setNeoStatus(p => ({ ...p, online: false })); return }
+        const d = await r.json()
+        setNeoStatus({ etat: d.etat ?? 'repos', online: true })
+        if (d.partial !== undefined) setPartial(d.partial ?? '')
+      } catch {
+        setNeoStatus(p => ({ ...p, online: false }))
+      }
     }
     poll()
     const id = setInterval(poll, 500)
     return () => clearInterval(id)
-  }, [])
+  }, [fetchSessions])
 
-  // ── Polling messages de la session active ────────────────────────────────
+  // ── Poll messages ───────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!activeId) return
     const poll = async () => {
       try {
-        const res = await fetch(`/api/flask/sessions/${activeId}`)
-        if (!res.ok) return
-        const data = await res.json()
-        const raw: Array<{ role: string; text: string; ts: number; source?: string }> = data.messages ?? []
-        if (raw.length !== msgCountRef.current) {
-          msgCountRef.current = raw.length
-          setMessages(raw.map((m, i) => ({
-            id: `${m.ts}-${i}`, role: m.role as 'user' | 'aria',
-            text: m.text, ts: m.ts, source: m.source as 'text' | 'voice' | undefined,
-          })))
+        const r = await fetch(`/api/flask/sessions/${activeId}`)
+        if (!r.ok) return
+        const d = await r.json()
+        const raw: RawMsg[] = d.messages ?? []
+        if (raw.length !== prevLen.current) {
+          prevLen.current = raw.length
+          setMessages(enrich(raw))
         }
       } catch {}
     }
+    prevLen.current = 0
     poll()
     const id = setInterval(poll, 1500)
     return () => clearInterval(id)
   }, [activeId])
 
-  // ── Auto-scroll ───────────────────────────────────────────────────────────
+  // ── Auto-scroll ─────────────────────────────────────────────────────────────
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, partial, sending])
+  }, [messages, partial])
 
-  // ── Ouvrir session ────────────────────────────────────────────────────────
-  const openSession = useCallback(async (sid: string) => {
-    setLoadingSession(true)
-    setMenuOpen(null)
-    setMessages([])
-    msgCountRef.current = 0
+  // ── Session CRUD ────────────────────────────────────────────────────────────
+
+  const createSession = async () => {
     try {
-      const res = await fetch(`/api/flask/sessions/${sid}`)
-      if (!res.ok) return
-      const data = await res.json()
-      const raw: Array<{ role: string; text: string; ts: number; source?: string }> = data.messages ?? []
-      msgCountRef.current = raw.length
-      setMessages(raw.map((m, i) => ({ id: `${m.ts}-${i}`, role: m.role as 'user' | 'aria', text: m.text, ts: m.ts, source: m.source as 'text' | 'voice' | undefined })))
-      setActiveId(sid)
+      const r = await fetch('/api/flask/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `${project.icon} ${project.label}` }),
+      })
+      if (!r.ok) return
+      const s = await r.json()
       await fetch('/api/flask/sessions/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: sid }),
+        body: JSON.stringify({ id: s.id }),
       })
-    } catch {} finally {
-      setLoadingSession(false)
-      setTimeout(() => inputRef.current?.focus(), 100)
-    }
-  }, [])
-
-  // ── Créer session ─────────────────────────────────────────────────────────
-  async function createSession() {
-    try {
-      const res = await fetch('/api/flask/sessions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      if (!res.ok) return
-      const s: Session = await res.json()
-      setSessions(prev => [s, ...prev])
-      await openSession(s.id)
+      setActiveId(s.id)
+      setMessages([])
+      prevLen.current = 0
+      await fetchSessions()
+      setShowSessions(false)
     } catch {}
   }
 
-  // ── Supprimer session ─────────────────────────────────────────────────────
-  async function deleteSession(sid: string) {
-    setMenuOpen(null)
+  const switchSession = async (id: string) => {
     try {
-      await fetch(`/api/flask/sessions/${sid}`, { method: 'DELETE' })
-      setSessions(prev => prev.filter(s => s.id !== sid))
-      if (activeId === sid) { setActiveId(null); setMessages([]) }
-    } catch {}
-  }
-
-  // ── Renommer session ──────────────────────────────────────────────────────
-  async function confirmRename(sid: string) {
-    if (!renameName.trim()) { setRenaming(null); return }
-    try {
-      const res = await fetch(`/api/flask/sessions/${sid}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: renameName.trim() }),
+      await fetch('/api/flask/sessions/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
       })
-      if (res.ok) {
-        const updated: Session = await res.json()
-        setSessions(prev => prev.map(s => s.id === sid ? { ...s, name: updated.name } : s))
-      }
+      setActiveId(id)
+      setMessages([])
+      prevLen.current = 0
+      setShowSessions(false)
     } catch {}
-    setRenaming(null)
   }
 
-  // ── Envoyer message texte ─────────────────────────────────────────────────
-  async function sendMessage(overrideText?: string) {
-    const text = (overrideText ?? input).trim()
-    if (!text || !activeId || sending) return
-    setInput('')
-    if (inputRef.current) inputRef.current.style.height = 'auto'
+  const deleteSession = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await fetch(`/api/flask/sessions/${id}`, { method: 'DELETE' })
+      if (activeId === id) setActiveId(null)
+      await fetchSessions()
+    } catch {}
+  }
+
+  const renameSession = async (id: string) => {
+    if (!editName.trim()) { setEditingId(null); return }
+    try {
+      await fetch(`/api/flask/sessions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editName.trim() }),
+      })
+      await fetchSessions()
+    } catch {}
+    setEditingId(null)
+  }
+
+  // ── Send ────────────────────────────────────────────────────────────────────
+
+  const sendText = useCallback(async (text: string) => {
+    if (!text.trim() || !activeId || sending) return
     setSending(true)
-
-    const ts = Date.now() / 1000
-    setMessages(prev => [...prev, { id: `${ts}-u`, role: 'user', text, ts, source: 'text' }])
-    msgCountRef.current += 1
-
+    setInput('')
+    if (textRef.current) textRef.current.style.height = 'auto'
     try {
-      const res = await fetch(`/api/flask/sessions/${activeId}/chat`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, robot_emotions: robotEmotions }),
-        signal: AbortSignal.timeout(35_000),
+      await fetch(`/api/flask/sessions/${activeId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim() }),
       })
-      const data = await res.json()
-      if (data.reply) {
-        const rts = data.ts ?? (Date.now() / 1000 + 1)
-        setMessages(prev => [...prev, { id: `${rts}-a`, role: 'aria', text: data.reply, ts: rts }])
-        msgCountRef.current += 1
-        setSessions(prev =>
-          prev.map(s => s.id === activeId
-            ? { ...s, last_message: data.reply.slice(0, 80), updated_at: rts, message_count: s.message_count + 2 }
-            : s
-          ).sort((a, b) => b.updated_at - a.updated_at)
-        )
-      } else if (data.error) {
-        const ets = Date.now() / 1000
-        setMessages(prev => [...prev, { id: `${ets}-e`, role: 'aria', text: `⚠️ ${data.error}`, ts: ets }])
-      }
-    } catch {
-      const ets = Date.now() / 1000
-      setMessages(prev => [...prev, { id: `${ets}-e`, role: 'aria', text: '⚠️ Impossible de contacter NEO.', ts: ets }])
-    } finally {
-      setSending(false)
-      inputRef.current?.focus()
-    }
+    } catch {}
+    setSending(false)
+  }, [activeId, sending])
+
+  const handleSubmit = (e: React.FormEvent) => { e.preventDefault(); sendText(input) }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(input) }
   }
 
-  // ── Microphone ────────────────────────────────────────────────────────────
-  async function toggleMic() {
-    setMicError(null)
-    if (micState === 'recording') { recorderRef.current?.stop(); return }
-    if (micState === 'processing') return
+  // ── Mic ─────────────────────────────────────────────────────────────────────
+
+  const toggleMic = async () => {
+    if (recording) { mediaRef.current?.stop(); setRecording(false); return }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      })
-      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg', '']
-        .find(t => !t || MediaRecorder.isTypeSupported(t)) ?? ''
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
       chunksRef.current = []
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      recorder.onstop = async () => {
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop())
-        setMicState('processing')
-        const ft = recorder.mimeType || 'audio/webm'
-        const blob = new Blob(chunksRef.current, { type: ft })
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
         try {
-          await fetch('/api/listen', { method: 'POST', body: blob, headers: { 'Content-Type': ft }, signal: AbortSignal.timeout(35_000) })
-        } catch (err) {
-          setMicError(`Erreur : ${err instanceof Error ? err.message : String(err)}`)
-        } finally { setMicState('idle') }
+          const r = await fetch('/api/flask/listen', {
+            method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: blob,
+          })
+          const d = await r.json()
+          if (d.transcription) sendText(d.transcription)
+        } catch {}
       }
-      recorderRef.current = recorder
-      recorder.start(200)
-      setMicState('recording')
-    } catch { setMicError('Micro inaccessible — autorisez l\'accès dans le navigateur.') }
+      mr.start()
+      mediaRef.current = mr
+      setRecording(true)
+    } catch {}
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
   const activeSession = sessions.find(s => s.id === activeId)
-  const isThinking    = sending || (!partial && effectiveStatus === 'reflechit')
 
-  // ── Rendu ──────────────────────────────────────────────────────────────────
+  const statusColor = ({
+    repos: '#4A4A60', ecoute: '#818CF8', reflechit: '#FBBF24',
+    parle: '#34D399', veille: '#2A2A3A',
+  } as Record<string, string>)[neoStatus.etat] ?? '#4A4A60'
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <div
-      className="flex flex-1 min-h-0 overflow-hidden"
-      style={{ height: 'calc(100dvh - var(--nav-h-desktop) - 0px)' }}
-      onClick={() => setMenuOpen(null)}
+      className="flex flex-col"
+      style={{ height: 'calc(100dvh - var(--nav-h))' }}
     >
-      {/* ════ SIDEBAR ════ */}
-      <AnimatePresence initial={false}>
-        {sidebarOpen && (
-          <motion.aside
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 224, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="flex flex-col flex-shrink-0 overflow-hidden"
-            style={{ borderRight: '1px solid var(--neo-border)', background: 'var(--neo-surface)' }}
-          >
-            {/* Header sidebar */}
-            <div className="px-3 pt-4 pb-2 flex items-center justify-between flex-shrink-0">
-              <span
-                className="text-[10px] font-semibold uppercase tracking-widest"
-                style={{ color: 'var(--neo-subtle)' }}
-              >
-                Conversations
-              </span>
-              <button
-                onClick={createSession}
-                className="w-6 h-6 rounded-lg flex items-center justify-center transition-colors"
-                style={{ background: 'var(--neo-accent-dim)', color: 'var(--neo-accent)' }}
-                title="Nouvelle conversation"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
 
-            {/* Liste */}
-            <div className="flex-1 overflow-y-auto px-1.5 pb-3 space-y-px">
-              {sessions.length === 0 ? (
-                <div className="p-5 text-center space-y-2">
-                  <p className="text-xs" style={{ color: 'var(--neo-subtle)' }}>Aucune conversation</p>
-                  <button
-                    onClick={createSession}
-                    className="text-xs transition-colors hover:underline"
-                    style={{ color: 'var(--neo-accent)' }}
-                  >
-                    Commencer →
-                  </button>
-                </div>
-              ) : sessions.map(s => (
-                <div
-                  key={s.id}
-                  className="group relative rounded-xl cursor-pointer transition-all"
-                  style={{
-                    background: activeId === s.id ? 'var(--neo-surface-2)' : 'transparent',
-                    border: `1px solid ${activeId === s.id ? 'var(--neo-border-2)' : 'transparent'}`,
-                  }}
-                  onClick={() => openSession(s.id)}
-                  onMouseEnter={e => {
-                    if (activeId !== s.id)
-                      (e.currentTarget as HTMLDivElement).style.background = 'var(--neo-surface-2)'
-                  }}
-                  onMouseLeave={e => {
-                    if (activeId !== s.id)
-                      (e.currentTarget as HTMLDivElement).style.background = 'transparent'
-                  }}
-                >
-                  {renaming === s.id ? (
-                    <div className="flex items-center gap-1 p-2" onClick={e => e.stopPropagation()}>
-                      <input
-                        autoFocus value={renameName}
-                        onChange={e => setRenameName(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') confirmRename(s.id); if (e.key === 'Escape') setRenaming(null) }}
-                        className="flex-1 text-xs px-2 py-1 outline-none rounded-lg"
-                        style={{ background: 'var(--neo-surface-3)', border: '1px solid var(--neo-accent)', color: 'var(--neo-text)' }}
-                      />
-                      <button onClick={() => confirmRename(s.id)} className="p-0.5" style={{ color: 'var(--neo-green)' }}><Check className="w-3 h-3" /></button>
-                      <button onClick={() => setRenaming(null)} className="p-0.5" style={{ color: 'var(--neo-muted)' }}><X className="w-3 h-3" /></button>
-                    </div>
-                  ) : (
-                    <div className="p-2.5 pr-8">
-                      <p className="text-xs font-medium truncate" style={{ color: activeId === s.id ? 'var(--neo-text)' : 'var(--neo-muted)' }}>{s.name}</p>
-                      {s.last_message && (
-                        <p className="text-[10px] truncate mt-0.5" style={{ color: 'var(--neo-subtle)' }}>{s.last_message}</p>
-                      )}
-                      <p className="text-[10px] mt-0.5" style={{ color: 'var(--neo-subtle)' }}>{fmtDate(s.updated_at)}</p>
-                    </div>
-                  )}
-
-                  {renaming !== s.id && (
-                    <div className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === s.id ? null : s.id) }}
-                        className="w-5 h-5 rounded flex items-center justify-center transition-colors"
-                        style={{ color: 'var(--neo-subtle)' }}
-                      >
-                        <MoreHorizontal className="w-3 h-3" />
-                      </button>
-                      {menuOpen === s.id && (
-                        <div
-                          className="absolute right-0 top-6 rounded-xl shadow-2xl py-1 z-50 min-w-[120px]"
-                          style={{ background: 'var(--neo-surface-3)', border: '1px solid var(--neo-border-2)' }}
-                          onClick={e => e.stopPropagation()}
-                        >
-                          <button
-                            onClick={() => { setRenameName(s.name); setRenaming(s.id); setMenuOpen(null) }}
-                            className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors"
-                            style={{ color: 'var(--neo-muted)' }}
-                            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-text)'}
-                            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-muted)'}
-                          >
-                            <Edit2 className="w-3 h-3" /> Renommer
-                          </button>
-                          <button
-                            onClick={() => deleteSession(s.id)}
-                            className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors"
-                            style={{ color: 'var(--neo-red)' }}
-                          >
-                            <Trash2 className="w-3 h-3" /> Supprimer
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-
-      {/* ════ ZONE PRINCIPALE ════ */}
-      <div className="flex flex-col flex-1 min-w-0 min-h-0">
-
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-3 flex-shrink-0 gap-3"
-          style={{ borderBottom: '1px solid var(--neo-border)' }}
+      {/* ── Header ── */}
+      <div
+        className="flex items-center gap-2 px-3 py-2 flex-shrink-0 relative"
+        style={{ background: 'var(--neo-bg)', borderBottom: '1px solid var(--neo-border)' }}
+      >
+        {/* Project */}
+        <button
+          onClick={() => { setShowProjects(p => !p); setShowSessions(false) }}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all flex-shrink-0"
+          style={{ background: project.color + '14', border: `1px solid ${project.color}30`, color: project.color }}
         >
-          <div className="flex items-center gap-2.5 min-w-0">
-            {/* Toggle sidebar */}
-            <button
-              onClick={() => setSidebarOpen(v => !v)}
-              className="p-1.5 rounded-lg transition-colors flex-shrink-0"
-              style={{ color: 'var(--neo-muted)' }}
-            >
-              <PanelLeft className="w-4 h-4" />
-            </button>
+          <span>{project.icon}</span>
+          <span className="hidden sm:inline">{project.label}</span>
+          <ChevronDown className="w-3 h-3 opacity-60" />
+        </button>
 
-            {offline ? (
-              <div className="flex items-center gap-1.5">
-                <WifiOff className="w-3.5 h-3.5" style={{ color: 'var(--neo-red)' }} />
-                <span className="text-sm" style={{ color: 'var(--neo-red)' }}>Hors ligne</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 min-w-0">
-                <motion.span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: STATUS_COLOR[effectiveStatus] }}
-                  animate={{ scale: effectiveStatus !== 'repos' ? [1, 1.4, 1] : 1 }}
-                  transition={{ repeat: effectiveStatus !== 'repos' ? Infinity : 0, duration: 1.2 }}
-                />
-                <span className="text-sm truncate">
-                  <span className="font-semibold" style={{ color: 'var(--neo-text)' }}>
-                    {activeSession?.name ?? 'NEO'}
-                  </span>
-                  <span style={{ color: 'var(--neo-muted)' }}> · {STATUS_LABEL[effectiveStatus]}</span>
-                </span>
-              </div>
-            )}
-          </div>
+        {/* Session */}
+        <button
+          onClick={() => { setShowSessions(p => !p); setShowProjects(false) }}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs transition-all min-w-0 flex-1"
+          style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border)', color: 'var(--neo-muted)' }}
+        >
+          <Layers className="w-3 h-3 flex-shrink-0" />
+          <span className="truncate">{activeSession?.name ?? 'Aucune conversation'}</span>
+          <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60 ml-auto" />
+        </button>
 
-          {/* Contrôles */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {/* Robot emotions toggle */}
-            <button
-              onClick={() => setRobotEmotions(v => !v)}
-              title="Réactions physiques du robot"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all"
-              style={{
-                background: robotEmotions ? 'rgba(52,211,153,0.1)' : 'var(--neo-surface)',
-                color:      robotEmotions ? 'var(--neo-green)' : 'var(--neo-muted)',
-                border:     `1px solid ${robotEmotions ? 'rgba(52,211,153,0.2)' : 'var(--neo-border)'}`,
-              }}
-            >
-              <Radio className="w-3 h-3" />
-              <span className="hidden sm:inline">Robot</span>
-            </button>
-
-            {/* Mode continu toggle */}
-            <button
-              onClick={async () => { await fetch('/api/flask/toggle_continu', { method: 'POST' }) }}
-              title="Mode écoute continue"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all"
-              style={{
-                background: modeContinue ? 'var(--neo-accent-dim)' : 'var(--neo-surface)',
-                color:      modeContinue ? 'var(--neo-accent)' : 'var(--neo-muted)',
-                border:     `1px solid ${modeContinue ? 'rgba(129,140,248,0.25)' : 'var(--neo-border)'}`,
-              }}
-            >
-              {modeContinue ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-              <span className="hidden sm:inline">{modeContinue ? 'Continu' : 'Manuel'}</span>
-            </button>
-          </div>
+        {/* Status dot */}
+        <div
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl flex-shrink-0"
+          style={{ background: 'var(--neo-surface)', border: `1px solid ${statusColor}30` }}
+        >
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: neoStatus.online ? statusColor : '#2A2A3A',
+              boxShadow: neoStatus.online ? `0 0 6px ${statusColor}80` : 'none',
+            }}
+          />
+          {neoStatus.online
+            ? <Wifi className="w-3 h-3" style={{ color: statusColor }} />
+            : <WifiOff className="w-3 h-3" style={{ color: 'var(--neo-subtle)' }} />
+          }
         </div>
 
-        {/* Zone messages */}
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {!activeId ? (
-            /* ── État vide ── */
-            <div className="h-full flex flex-col items-center justify-center gap-6 p-8 text-center">
-              <div>
-                <div
-                  className="w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 text-3xl select-none"
-                  style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border)' }}
+        {/* ── Project dropdown ── */}
+        <AnimatePresence>
+          {showProjects && (
+            <motion.div
+              initial={{ opacity: 0, y: -4, scaleY: 0.95 }}
+              animate={{ opacity: 1, y: 0, scaleY: 1 }}
+              exit={{ opacity: 0, y: -4, scaleY: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="absolute top-full left-3 mt-1 z-50 rounded-2xl overflow-hidden shadow-2xl w-52"
+              style={{ background: 'var(--neo-surface-2)', border: '1px solid var(--neo-border-2)', transformOrigin: 'top left' }}
+            >
+              {PROJECTS.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => { setProject(p); setShowProjects(false) }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-all text-left"
+                  style={{
+                    background: project.id === p.id ? p.color + '12' : 'transparent',
+                    color: project.id === p.id ? p.color : 'var(--neo-muted)',
+                  }}
                 >
-                  ✦
-                </div>
-                <h2 className="text-xl font-semibold" style={{ color: 'var(--neo-text)' }}>
-                  Parle à NEO
-                </h2>
-                <p className="text-sm mt-1 max-w-xs mx-auto" style={{ color: 'var(--neo-muted)' }}>
-                  Même conversation — voix depuis le robot ou texte depuis l'appli
-                </p>
-              </div>
-              <button
-                onClick={createSession}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium transition-all"
-                style={{ background: 'var(--neo-accent-dim)', color: 'var(--neo-accent)', border: '1px solid rgba(129,140,248,0.25)' }}
-              >
-                <Plus className="w-4 h-4" />
-                Nouvelle conversation
-              </button>
-              <div className="flex flex-wrap gap-2 justify-center max-w-sm">
-                {SUGGESTIONS.map(s => (
-                  <button
-                    key={s}
-                    onClick={createSession}
-                    className="px-3 py-1.5 rounded-full text-xs transition-all"
-                    style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border)', color: 'var(--neo-muted)' }}
-                    onMouseEnter={e => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(129,140,248,0.3)'
-                      ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-accent)'
-                    }}
-                    onMouseLeave={e => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--neo-border)'
-                      ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-muted)'
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : loadingSession ? (
-            <div className="h-full flex items-center justify-center">
-              <div
-                className="w-5 h-5 border-2 rounded-full animate-spin"
-                style={{ borderColor: 'var(--neo-border-2)', borderTopColor: 'var(--neo-accent)' }}
-              />
-            </div>
-          ) : (
-            <div className="px-5 py-6 space-y-6">
-              {messages.length === 0 && !isThinking && !partial && (
-                <div className="flex flex-col items-center gap-4 py-12 text-center">
-                  <p className="text-sm" style={{ color: 'var(--neo-subtle)' }}>
-                    Commence à écrire ou utilise le micro
-                  </p>
-                  <div className="flex flex-wrap gap-2 justify-center max-w-xs">
-                    {SUGGESTIONS.map(s => (
-                      <button
-                        key={s}
-                        onClick={() => sendMessage(s)}
-                        className="px-3 py-1.5 rounded-full text-xs transition-all"
-                        style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border)', color: 'var(--neo-muted)' }}
-                        onMouseEnter={e => {
-                          (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(129,140,248,0.3)'
-                          ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-accent)'
-                        }}
-                        onMouseLeave={e => {
-                          (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--neo-border)'
-                          ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--neo-muted)'
-                        }}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                  <span>{p.icon}</span>
+                  <span>{p.label}</span>
+                  {project.id === p.id && <Check className="w-3.5 h-3.5 ml-auto" />}
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-              <AnimatePresence initial={false}>
-                {messages.map(msg => (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+        {/* ── Sessions dropdown ── */}
+        <AnimatePresence>
+          {showSessions && (
+            <motion.div
+              initial={{ opacity: 0, y: -4, scaleY: 0.95 }}
+              animate={{ opacity: 1, y: 0, scaleY: 1 }}
+              exit={{ opacity: 0, y: -4, scaleY: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="absolute top-full right-3 mt-1 z-50 rounded-2xl overflow-hidden shadow-2xl w-64"
+              style={{ background: 'var(--neo-surface-2)', border: '1px solid var(--neo-border-2)', transformOrigin: 'top right' }}
+            >
+              <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--neo-border)' }}>
+                <span className="text-xs font-semibold" style={{ color: 'var(--neo-muted)' }}>Conversations</span>
+                <button
+                  onClick={createSession}
+                  className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-all"
+                  style={{ background: 'var(--neo-accent-dim)', color: 'var(--neo-accent)', border: '1px solid rgba(129,140,248,0.2)' }}
+                >
+                  <Plus className="w-3 h-3" />
+                  Nouvelle
+                </button>
+              </div>
+              <div className="overflow-y-auto max-h-64 py-1">
+                {sessions.length === 0 && (
+                  <p className="px-4 py-4 text-xs text-center" style={{ color: 'var(--neo-subtle)' }}>
+                    Aucune conversation
+                  </p>
+                )}
+                {sessions.map(s => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-2 px-3 py-2 cursor-pointer group"
+                    style={{ background: activeId === s.id ? 'rgba(129,140,248,0.06)' : 'transparent' }}
+                    onClick={() => editingId !== s.id && switchSession(s.id)}
                   >
-                    {msg.role === 'aria' ? (
-                      /* NEO message — left aligned, clean text */
-                      <div className="max-w-[86%] space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          {/* NEO avatar */}
-                          <div
-                            className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
-                            style={{ background: 'linear-gradient(135deg, var(--neo-accent), var(--neo-accent-2))' }}
-                          >
-                            <span className="text-white text-[7px] font-bold">N</span>
-                          </div>
-                          <span className="text-[11px] font-semibold" style={{ color: 'var(--neo-text)' }}>NEO</span>
-                          {/* Channel badge */}
-                          {msg.source === 'voice' && (
-                            <span
-                              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full"
-                              style={{ background: 'rgba(167,139,250,0.12)', color: '#A78BFA' }}
-                              title="Depuis le robot"
-                            >
-                              <Radio className="w-2.5 h-2.5" />
-                              robot
-                            </span>
-                          )}
-                          <span className="text-[10px]" style={{ color: 'var(--neo-subtle)' }}>{fmtTime(msg.ts)}</span>
-                        </div>
-                        <div
-                          className="ml-7 text-sm leading-relaxed whitespace-pre-wrap"
-                          style={{ color: 'var(--neo-text)' }}
-                        >
-                          {msg.text}
-                        </div>
+                    {editingId === s.id ? (
+                      <div className="flex items-center gap-1 flex-1" onClick={e => e.stopPropagation()}>
+                        <input
+                          autoFocus
+                          value={editName}
+                          onChange={e => setEditName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') renameSession(s.id)
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          className="flex-1 text-xs px-2 py-1 rounded-lg outline-none"
+                          style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border-2)', color: 'var(--neo-text)' }}
+                        />
+                        <button onClick={() => renameSession(s.id)} style={{ color: '#34D399' }}>
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setEditingId(null)} style={{ color: 'var(--neo-subtle)' }}>
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ) : (
-                      /* User message — right bubble */
-                      <div className="max-w-[72%] space-y-1">
-                        <div
-                          className="px-4 py-2.5 rounded-2xl rounded-br-sm text-sm leading-relaxed whitespace-pre-wrap"
-                          style={{ background: 'var(--neo-accent-dim)', color: 'var(--neo-text)', border: '1px solid rgba(129,140,248,0.2)' }}
-                        >
-                          {msg.text}
+                      <>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate" style={{ color: activeId === s.id ? 'var(--neo-accent)' : 'var(--neo-text)' }}>
+                            {s.name}
+                          </p>
+                          <p className="text-[10px] truncate" style={{ color: 'var(--neo-subtle)' }}>
+                            {s.message_count} messages
+                          </p>
                         </div>
-                        <div className="flex justify-end items-center gap-1.5">
-                          {msg.source === 'voice' && (
-                            <span className="text-[9px]" style={{ color: 'var(--neo-subtle)' }}>
-                              <Radio className="w-2.5 h-2.5 inline" />
-                            </span>
-                          )}
-                          {msg.source === 'text' && (
-                            <Smartphone className="w-2.5 h-2.5" style={{ color: 'var(--neo-subtle)' }} />
-                          )}
-                          <span className="text-[10px]" style={{ color: 'var(--neo-subtle)' }}>{fmtTime(msg.ts)}</span>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={e => { e.stopPropagation(); setEditingId(s.id); setEditName(s.name) }}
+                            className="p-1 rounded"
+                            style={{ color: 'var(--neo-muted)' }}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={e => deleteSession(s.id, e)}
+                            className="p-1 rounded"
+                            style={{ color: 'var(--neo-red)' }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
-                      </div>
+                      </>
                     )}
-                  </motion.div>
+                  </div>
                 ))}
-              </AnimatePresence>
-
-              {/* Thinking indicator */}
-              <AnimatePresence>
-                {isThinking && !partial && (
-                  <motion.div
-                    key="thinking"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex justify-start"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-5 h-5 rounded-full flex items-center justify-center"
-                          style={{ background: 'linear-gradient(135deg, var(--neo-accent), var(--neo-accent-2))' }}
-                        >
-                          <span className="text-white text-[7px] font-bold">N</span>
-                        </div>
-                        <span className="text-[11px] font-semibold" style={{ color: 'var(--neo-orange)' }}>NEO ◎</span>
-                      </div>
-                      <div className="ml-7 flex items-center gap-1.5 py-1">
-                        {[0, 1, 2].map(i => (
-                          <motion.span
-                            key={i}
-                            className="w-1.5 h-1.5 rounded-full"
-                            style={{ background: 'var(--neo-orange)' }}
-                            animate={{ opacity: [0.25, 1, 0.25], y: [0, -3, 0] }}
-                            transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.18 }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Streaming partiel (voix robot) */}
-              <AnimatePresence>
-                {partial && (
-                  <motion.div
-                    key="partial"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex justify-start"
-                  >
-                    <div className="max-w-[86%] space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
-                          style={{ background: 'linear-gradient(135deg, var(--neo-accent), var(--neo-accent-2))' }}
-                        >
-                          <span className="text-white text-[7px] font-bold">N</span>
-                        </div>
-                        <span className="text-[11px] font-semibold" style={{ color: 'var(--neo-green)' }}>NEO ✦</span>
-                        <span
-                          className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full"
-                          style={{ background: 'rgba(167,139,250,0.12)', color: '#A78BFA' }}
-                        >
-                          <Radio className="w-2.5 h-2.5" />
-                          robot
-                        </span>
-                      </div>
-                      <div
-                        className="ml-7 text-sm leading-relaxed whitespace-pre-wrap"
-                        style={{ color: 'var(--neo-text)' }}
-                      >
-                        {partial}
-                        <span
-                          className="inline-block w-[2px] h-[13px] ml-1 rounded-sm align-middle animate-cursor"
-                          style={{ background: 'var(--neo-accent)' }}
-                        />
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <div ref={bottomRef} />
-            </div>
+              </div>
+            </motion.div>
           )}
-        </div>
-
-        {/* Zone de saisie */}
-        <div
-          className="flex-shrink-0 px-4 py-3"
-          style={{ borderTop: '1px solid var(--neo-border)' }}
-        >
-          {micError && (
-            <p className="text-xs text-center mb-2" style={{ color: 'var(--neo-red)' }}>{micError}</p>
-          )}
-
-          <div
-            className={`flex items-end gap-2 rounded-2xl px-3 py-2 transition-opacity ${!activeId ? 'opacity-40 pointer-events-none' : ''}`}
-            style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border-2)' }}
-          >
-            {/* Mic */}
-            <div className="relative flex-shrink-0">
-              {micState === 'recording' && (
-                <span className="absolute inset-0 rounded-full bg-red-400 opacity-20 animate-ping scale-125" />
-              )}
-              <button
-                onClick={toggleMic}
-                disabled={micState === 'processing' || offline}
-                title={micState === 'recording' ? 'Arrêter' : 'Parler à NEO'}
-                className="relative z-10 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{
-                  background: micState === 'recording'
-                    ? 'rgba(248,113,113,0.15)'
-                    : 'var(--neo-surface-2)',
-                  border: `1px solid ${micState === 'recording' ? 'rgba(248,113,113,0.3)' : 'var(--neo-border)'}`,
-                  color: micState === 'recording' ? 'var(--neo-red)' : 'var(--neo-muted)',
-                }}
-              >
-                {micState === 'processing' ? (
-                  <div
-                    className="w-4 h-4 border-[1.5px] rounded-full animate-spin"
-                    style={{ borderColor: 'var(--neo-border-2)', borderTopColor: 'var(--neo-muted)' }}
-                  />
-                ) : micState === 'recording' ? (
-                  <Square className="w-3.5 h-3.5 fill-current" />
-                ) : (
-                  <Mic className="w-4 h-4" />
-                )}
-              </button>
-            </div>
-
-            {/* Textarea */}
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onInput={e => {
-                const t = e.target as HTMLTextAreaElement
-                t.style.height = 'auto'
-                t.style.height = Math.min(t.scrollHeight, 120) + 'px'
-              }}
-              placeholder={activeId ? 'Envoyer un message à NEO…' : 'Sélectionne une conversation'}
-              rows={1}
-              disabled={sending || !activeId}
-              className="flex-1 bg-transparent text-sm resize-none outline-none leading-relaxed py-1.5 disabled:opacity-50"
-              style={{ color: 'var(--neo-text)', maxHeight: '120px', minHeight: '22px' }}
-            />
-
-            {/* Send */}
-            <button
-              onClick={() => sendMessage()}
-              disabled={!input.trim() || sending || !activeId}
-              className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-95 disabled:opacity-25 disabled:cursor-not-allowed"
-              style={{ background: 'var(--neo-accent-dim)', color: 'var(--neo-accent)', border: '1px solid rgba(129,140,248,0.25)' }}
-            >
-              {sending ? (
-                <div
-                  className="w-3.5 h-3.5 border-[1.5px] rounded-full animate-spin"
-                  style={{ borderColor: 'rgba(129,140,248,0.25)', borderTopColor: 'var(--neo-accent)' }}
-                />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-            </button>
-          </div>
-
-          <p className="text-[10px] text-center mt-1.5 select-none" style={{ color: 'var(--neo-subtle)' }}>
-            Entrée pour envoyer · Maj+Entrée pour nouvelle ligne ·{' '}
-            {micState === 'recording' ? '🔴 Enregistrement' : micState === 'processing' ? '⏳ Traitement…' : '🎤 Micro dispo'}
-          </p>
-        </div>
+        </AnimatePresence>
       </div>
+
+      {/* ── Feed ── */}
+      <div
+        className="flex-1 overflow-y-auto px-4 py-4 min-h-0"
+        onClick={() => { setShowSessions(false); setShowProjects(false) }}
+      >
+        {messages.length === 0 && !partial && (
+          <div className="flex flex-col items-center justify-center h-full gap-4 opacity-40">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center"
+              style={{ background: project.color + '14', border: `1px solid ${project.color}30` }}
+            >
+              <Bot className="w-7 h-7" style={{ color: project.color }} />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium" style={{ color: 'var(--neo-muted)' }}>NEO est prêt</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--neo-subtle)' }}>
+                {activeId ? 'Envoyez un message ou parlez au robot' : 'Créez une conversation pour commencer'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {messages.map((msg, i) => (
+          <MessageCard
+            key={msg._key}
+            msg={msg}
+            isLast={i === messages.length - 1}
+            onQuickReply={sendText}
+          />
+        ))}
+
+        {partial && <PartialCard text={partial} />}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* ── Input bar ── */}
+      <form
+        onSubmit={handleSubmit}
+        className="flex-shrink-0 px-4 pb-4 pt-2"
+        onClick={() => { setShowSessions(false); setShowProjects(false) }}
+      >
+        <div
+          className="flex items-end gap-2 rounded-2xl px-3 py-2.5"
+          style={{ background: 'var(--neo-surface)', border: '1px solid var(--neo-border-2)' }}
+        >
+          <button
+            type="button"
+            onClick={toggleMic}
+            className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all"
+            style={{
+              background: recording ? 'rgba(248,113,113,0.12)' : 'var(--neo-surface-2)',
+              border: `1px solid ${recording ? 'rgba(248,113,113,0.3)' : 'var(--neo-border)'}`,
+              color: recording ? '#F87171' : 'var(--neo-muted)',
+            }}
+          >
+            {recording ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+          </button>
+
+          <textarea
+            ref={textRef}
+            value={input}
+            onChange={e => {
+              setInput(e.target.value)
+              e.target.style.height = 'auto'
+              e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder={activeId ? 'Écrire à NEO…' : 'Créez une conversation d\'abord…'}
+            disabled={!activeId}
+            rows={1}
+            className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed disabled:opacity-40"
+            style={{ color: 'var(--neo-text)', minHeight: '20px', maxHeight: '120px' }}
+          />
+
+          <button
+            type="submit"
+            disabled={!input.trim() || sending || !activeId}
+            className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-30"
+            style={{ background: 'linear-gradient(135deg, var(--neo-accent), var(--neo-accent-2))', color: '#fff' }}
+          >
+            {sending ? (
+              <div className="w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
+            ) : (
+              <Send className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
+
+        {!activeId && (
+          <p className="text-center text-[11px] mt-2" style={{ color: 'var(--neo-subtle)' }}>
+            <button type="button" onClick={createSession} className="underline" style={{ color: 'var(--neo-accent)' }}>
+              Créer une conversation
+            </button>
+            {' '}pour commencer
+          </p>
+        )}
+      </form>
     </div>
   )
 }
