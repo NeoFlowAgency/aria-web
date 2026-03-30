@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'ARIA',
-  description: 'Interface de contrôle du robot ARIA',
+  title: 'NEO',
+  description: 'Votre associé IA',
 }
 
 export default function RootLayout({

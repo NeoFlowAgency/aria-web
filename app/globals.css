@@ -3,16 +3,24 @@
 @tailwind utilities;
 
 :root {
-  --apple-white: #ffffff;
-  --apple-offwhite: #f5f5f7;
-  --apple-divider: #d2d2d7;
-  --apple-label: #1d1d1f;
-  --apple-secondary: #86868b;
-  --apple-blue: #0071e3;
-  --apple-blue-hover: #0077ed;
-  --apple-red: #ff3b30;
-  --apple-green: #34c759;
-  --apple-orange: #ff9500;
+  --neo-bg:          #07070A;
+  --neo-surface:     #0F0F14;
+  --neo-surface-2:   #16161D;
+  --neo-surface-3:   #1E1E28;
+  --neo-border:      rgba(255, 255, 255, 0.06);
+  --neo-border-2:    rgba(255, 255, 255, 0.10);
+  --neo-text:        #E8E8F0;
+  --neo-muted:       #8B8BA0;
+  --neo-subtle:      #4A4A60;
+  --neo-accent:      #818CF8;
+  --neo-accent-2:    #A78BFA;
+  --neo-accent-dim:  rgba(129, 140, 248, 0.12);
+  --neo-green:       #34D399;
+  --neo-orange:      #FBBF24;
+  --neo-red:         #F87171;
+  --neo-pink:        #F472B6;
+  --nav-h-mobile:    64px;
+  --nav-h-desktop:   56px;
 }
 
 * {
@@ -25,29 +33,71 @@ html {
 }
 
 body {
-  background-color: var(--apple-offwhite);
-  color: var(--apple-label);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
-    'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--neo-bg);
+  color: var(--neo-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display',
+    'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  overflow-x: hidden;
 }
 
-/* Scrollbar minimaliste */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--apple-divider);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--apple-secondary);
+  background: rgba(255, 255, 255, 0.15);
 }
 
-/* Sélection */
+/* Selection */
 ::selection {
-  background: rgba(0, 113, 227, 0.2);
+  background: rgba(129, 140, 248, 0.25);
 }
+
+/* Animations */
+@keyframes neo-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.75; transform: scale(1.06); }
+}
+
+@keyframes neo-glow {
+  0%, 100% { box-shadow: 0 0 24px rgba(129,140,248,0.18), 0 0 48px rgba(129,140,248,0.04); }
+  50%       { box-shadow: 0 0 36px rgba(129,140,248,0.32), 0 0 72px rgba(129,140,248,0.09); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.animate-neo-pulse  { animation: neo-pulse 2s ease-in-out infinite; }
+.animate-neo-glow   { animation: neo-glow  2s ease-in-out infinite; }
+.animate-fade-up    { animation: fade-up   0.4s ease-out forwards; }
+.animate-fade-in    { animation: fade-up   0.3s ease-out forwards; }
+.animate-cursor     { animation: blink-cursor 1s step-end infinite; }
+
+/* Range input */
+input[type='range'] {
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--neo-surface-3);
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--neo-accent);
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(129,140,248,0.4);
+}
+input[type='range']:disabled { opacity: 0.4; }
