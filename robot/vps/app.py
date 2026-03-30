@@ -478,7 +478,13 @@ def route_session_chat(sid: str):
             json={"model": "main", "messages": messages_oc, "stream": False},
             timeout=30,
         )
-        reply_raw   = resp.json()["choices"][0]["message"]["content"]
+        resp_json = resp.json()
+        if "choices" not in resp_json:
+            err = resp_json.get("error", resp_json)
+            if isinstance(err, dict):
+                err = err.get("message", str(err)[:120])
+            raise ValueError(f"OpenClaw indisponible : {err}")
+        reply_raw   = resp_json["choices"][0]["message"]["content"]
         reply_clean = _tag_clean(reply_raw)
 
         if robot_emotions and mqtt_connected:
