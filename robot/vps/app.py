@@ -36,6 +36,7 @@ NEO_API_KEY    = os.environ.get("NEO_API_KEY", "")
 DATA_DIR      = pathlib.Path(os.environ.get("DATA_DIR", "/app/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SESSIONS_FILE = DATA_DIR / "sessions.json"
+PLAN_FILE     = DATA_DIR / "plan.json"
 
 SYSTEM_PROMPT = (
     "Tu es NEO, un robot IA physique créé par Noakim. "
@@ -49,6 +50,48 @@ SYSTEM_PROMPT = (
 _sessions: dict[str, dict] = {}
 _active_session_id: str | None = None
 _sessions_lock = threading.Lock()
+
+# ── Plan partagé Noakim ↔ NEO ─────────────────────────────────
+_plan: dict = {}
+_plan_lock = threading.Lock()
+
+def _default_plan() -> dict:
+    now = int(time.time())
+    return {
+        "monthly": {
+            "period": "",
+            "objectives": []   # [{id, text, done}]
+        },
+        "weekly": {
+            "period": "",
+            "focus": [],       # [string]
+            "tasks": {"user": [], "neo": []}  # [{id, text, done, created_at}]
+        },
+        "daily": {
+            "date": "",
+            "tasks": {"user": [], "neo": []}
+        },
+        "updated_at": now
+    }
+
+def _load_plan():
+    global _plan
+    if PLAN_FILE.exists():
+        try:
+            with open(PLAN_FILE, encoding="utf-8") as f:
+                _plan = json.load(f)
+        except Exception as e:
+            print(f"[Plan] Erreur chargement: {e}")
+            _plan = _default_plan()
+    else:
+        _plan = _default_plan()
+
+def _save_plan():
+    try:
+        with open(PLAN_FILE, "w", encoding="utf-8") as f:
+            json.dump(_plan, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Plan] Erreur sauvegarde: {e}")
 
 def _tag_clean(text: str) -> str:
     return _re.sub(r"\[.*?\]", "", text).strip()
@@ -533,6 +576,80 @@ def route_servo():
     send_command("servo", angle=angle)
     return jsonify({"status": "ok", "angle": angle})
 
+# ══════════════════════════════════════════════════════════════
+# PLAN REST API
+# ══════════════════════════════════════════════════════════════
+
+@app.route("/plan", methods=["GET"])
+def route_plan_get():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    with _plan_lock:
+        return jsonify(_plan)
+
+@app.route("/plan", methods=["PATCH"])
+def route_plan_patch():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    with _plan_lock:
+        for section in ("monthly", "weekly", "daily"):
+            if section in data and isinstance(data[section], dict):
+                _plan[section].update(data[section])
+        _plan["updated_at"] = int(time.time())
+    _save_plan()
+    return jsonify(_plan)
+
+@app.route("/plan/tasks", methods=["POST"])
+def route_plan_task_add():
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    scope    = data.get("scope", "daily")     # "daily" | "weekly"
+    assignee = data.get("assignee", "user")   # "user" | "neo"
+    text     = str(data.get("text", "")).strip()
+    if not text or scope not in ("daily", "weekly") or assignee not in ("user", "neo"):
+        return jsonify({"error": "Paramètres invalides"}), 400
+    task = {"id": str(uuid.uuid4())[:8], "text": text, "done": False, "created_at": int(time.time())}
+    with _plan_lock:
+        _plan[scope]["tasks"][assignee].append(task)
+        _plan["updated_at"] = int(time.time())
+    _save_plan()
+    return jsonify(task), 201
+
+@app.route("/plan/tasks/<tid>", methods=["PATCH"])
+def route_plan_task_patch(tid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    with _plan_lock:
+        for scope in ("daily", "weekly"):
+            for assignee in ("user", "neo"):
+                for task in _plan[scope]["tasks"][assignee]:
+                    if task["id"] == tid:
+                        if "done" in data: task["done"] = bool(data["done"])
+                        if "text" in data: task["text"] = str(data["text"]).strip()[:200]
+                        _plan["updated_at"] = int(time.time())
+                        _save_plan()
+                        return jsonify(task)
+    return jsonify({"error": "Tâche introuvable"}), 404
+
+@app.route("/plan/tasks/<tid>", methods=["DELETE"])
+def route_plan_task_delete(tid: str):
+    if not verify_neo_key(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    with _plan_lock:
+        for scope in ("daily", "weekly"):
+            for assignee in ("user", "neo"):
+                tasks = _plan[scope]["tasks"][assignee]
+                for i, task in enumerate(tasks):
+                    if task["id"] == tid:
+                        tasks.pop(i)
+                        _plan["updated_at"] = int(time.time())
+                        _save_plan()
+                        return jsonify({"status": "ok"})
+    return jsonify({"error": "Tâche introuvable"}), 404
+
 # ── Dashboard local (port 5050) ────────────────────────────────
 @app.route("/")
 def index():
@@ -609,6 +726,7 @@ def on_clear_logs():
 # ── Main ──────────────────────────────────────────────────────
 if __name__ == "__main__":
     _load_sessions()
+    _load_plan()
     log("INFO", f"{len(_sessions)} session(s) chargée(s)")
     threading.Thread(target=mqtt_loop, daemon=True).start()
     log("INFO", f"NEO Control démarré — MQTT:{MQTT_HOST}:{MQTT_PORT} | OpenClaw:{OPENCLAW_URL}")
